@@ -1,0 +1,4 @@
+{
+    "jwtPrivateKey": "",
+    "db": "mongodb+srv://easyinjection.7socakz.mongodb.net/"
+}
