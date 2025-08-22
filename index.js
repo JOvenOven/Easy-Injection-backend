@@ -1,6 +1,8 @@
+require("dotenv").config();
 const express = require('express');
 const app = express();
 
+require('./startup/db')();
 require('./startup/routes')(app);
 
 //Loading server on env.PORT or 3000

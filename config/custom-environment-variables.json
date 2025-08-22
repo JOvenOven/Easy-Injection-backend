@@ -1,3 +1,5 @@
 {
-    "jwtPrivateKey": "easyinjection_jwtPrivateKey"
+    "jwtPrivateKey": "EASYINJECTION_JWT_PRIVATEKEY",
+    "db": "EASYINJECTION_DB"
 }
+  
