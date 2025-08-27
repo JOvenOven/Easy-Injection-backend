@@ -1,5 +1,9 @@
 {
-    "jwtPrivateKey": "EASYINJECTION_JWT_PRIVATEKEY",
-    "db": "EASYINJECTION_DB"
+    "baseUrlFrontend": "BASE_URL_FRONTEND",
+    "jwtPrivateKey": "easyinjection_dev_jwtPrivateKey_2024",
+    "db": "EASYINJECTION_DB",
+    "email": {
+        "user": "EMAIL_USER",
+        "password": "EMAIL_PASS"
+    }
 }
-  

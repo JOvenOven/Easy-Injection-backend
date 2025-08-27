@@ -93,8 +93,12 @@ const userSchema = new mongoose.Schema({
     },
     estado_cuenta: {
         type: String,
-        enum: ['activo', 'inactivo', 'suspendido'],
-        default: 'activo'
+        enum: ['pendiente', 'activo', 'inactivo', 'suspendido'],
+        default: 'pendiente'
+    },
+    email_verificado: { // Este campo no está en la documentación
+        type: Boolean,
+        default: false
     },
     token_verificacion: { 
         type: String 

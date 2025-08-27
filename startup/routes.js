@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 // const users = require('../routes/users');
 const register = require('../routes/register');
+const verifyEmail = require('../routes/verify-email');
 // const shows = require('../routes/shows');
 // const login = require('../routes/login');
 const error = require('../middleware/error');
@@ -13,6 +14,7 @@ module.exports = function(app) {
     // app.use('/api/users', users);
     // app.use('/api/shows', shows);
     app.use('/api/register', register);
+    app.use('/api/verify-email', verifyEmail);
     // app.use('/api/login', login);
     app.use(error);
 }

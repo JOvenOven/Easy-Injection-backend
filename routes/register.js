@@ -1,6 +1,8 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
+const crypto = require('crypto');
 const { User, validate } = require('../models/usuario');
+const emailService = require('../services/emailService');
 const router = express.Router();
 
 // POST /api/register
@@ -40,30 +42,43 @@ router.post('/', async (req, res) => {
         const salt = await bcrypt.genSalt(10);
         const hashedPassword = await bcrypt.hash(req.body.password, salt);
 
+        // Generate verification token
+        const verificationToken = crypto.randomBytes(32).toString('hex');
+        const expirationDate = new Date();
+        expirationDate.setHours(expirationDate.getHours() + 24); // 24 hours from now
+
         // Create new user
         user = new User({
             username: req.body.username,
             email: req.body.email,
-            contrasena_hash: hashedPassword
+            contrasena_hash: hashedPassword,
+            token_verificacion: verificationToken,
+            fecha_expiracion_token: expirationDate
         });
 
         await user.save();
 
-        // Generate JWT token
-        const token = user.generateAuthToken();
+        // Send verification email
+        const emailSent = await emailService.sendVerificationEmail(
+            user.email, 
+            user.username, 
+            verificationToken
+        );
 
-        // Return user data (without password) and token
+        // Return user data (without password) and verification status
         res.status(201).json({
-            message: 'Usuario registrado exitosamente',
+            message: 'Usuario registrado exitosamente. Por favor verifica tu email para activar tu cuenta.',
             user: {
                 _id: user._id,
                 username: user.username,
                 email: user.email,
                 fecha_registro: user.fecha_registro,
                 estado_cuenta: user.estado_cuenta,
+                email_verificado: user.email_verificado,
                 perfil: user.perfil
             },
-            token: token
+            emailSent: emailSent,
+            requiresVerification: true
         });
 
     } catch (error) {
