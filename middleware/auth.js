@@ -2,19 +2,24 @@ const jwt = require('jsonwebtoken');
 const config = require('config');
 const { User } = require('../models/usuario');
 
-module.exports = async function(req, res, next) {
-    const token = req.header('x-auth-token');
+module.exports = async function (req, res, next) {
+    // Obtener el header "Authorization"
+    const authHeader = req.header('Authorization');
     
-    if (!token) {
+    // Verificar que existe y tiene el formato correcto
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
         return res.status(401).json({ 
-            error: 'Acceso denegado. No se proporcionó token.' 
+            error: 'Acceso denegado. No se proporcionó un token válido en el encabezado Authorization.' 
         });
     }
+
+    // Extraer el token (quitar "Bearer ")
+    const token = authHeader.replace('Bearer ', '');
 
     try {
         const decoded = jwt.verify(token, config.get('jwtPrivateKey'));
         
-        // Verify user still exists and is active
+        // Verificar que el usuario aún existe y está activo
         const user = await User.findById(decoded._id);
         if (!user) {
             return res.status(401).json({ 

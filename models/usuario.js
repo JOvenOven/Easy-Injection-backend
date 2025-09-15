@@ -57,9 +57,10 @@ const profileSchema = new mongoose.Schema({
         type: Number, 
         default: 1 
     },
-    avatar: { 
-        type: Buffer 
-    } // guardamos la imagen como binario
+    avatarId: { 
+        type: String,
+        default: 'avatar1'
+    } // ID del avatar predefinido
 });
 
 // Schema de usuarios
@@ -117,7 +118,7 @@ userSchema.methods.generateAuthToken = function () {
     const token = jwt.sign(
         { _id: this._id, username: this.username, email: this.email },
         config.get('jwtPrivateKey'),
-        { expiresIn: '1h' }
+        { expiresIn: '24h' }
     );
     return token;
 };
