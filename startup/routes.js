@@ -5,6 +5,7 @@ const verifyEmail = require('../routes/verify-email');
 const login = require('../routes/login');
 const auth = require('../routes/auth');
 const user = require('../routes/user');
+const scans = require('../routes/scans');
 const error = require('../middleware/error');
 
 module.exports = function(app) {
@@ -16,5 +17,6 @@ module.exports = function(app) {
     app.use('/api/login', login);
     app.use('/api/auth', auth);
     app.use('/api/user', user);
+    app.use('/api/scans', scans);
     app.use(error);
 }

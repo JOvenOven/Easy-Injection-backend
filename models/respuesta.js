@@ -1,3 +1,6 @@
+const Joi = require('joi');
+const mongoose = require('mongoose');
+
 // Schema de respuestas
 const answerSchema = new mongoose.Schema({
     pregunta_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Question', required: true },
