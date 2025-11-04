@@ -9,7 +9,12 @@ const questionSchema = new mongoose.Schema({
         enum: ['facil', 'media', 'dificil'], 
         required: true 
     },
-    puntos: { type: Number, required: true }
+    puntos: { type: Number, required: true },
+    fase: {
+        type: String,
+        enum: ['init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss'],
+        required: true
+    }
 });
 
 // Modelo
@@ -20,7 +25,8 @@ function validateQuestion(question) {
     const schema = Joi.object({
         texto_pregunta: Joi.string().required(),
         dificultad: Joi.string().valid('facil', 'media', 'dificil').required(),
-        puntos: Joi.number().min(1).required()
+        puntos: Joi.number().min(1).required(),
+        fase: Joi.string().valid('init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss').required()
     });
 
     return schema.validate(question);

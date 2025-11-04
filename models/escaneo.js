@@ -61,9 +61,6 @@ const scanSchema = new mongoose.Schema({
     }
 });
 
-// Modelo
-const Scan = mongoose.model('Scan', scanSchema);
-
 // Método para calcular la puntuación final
 scanSchema.methods.calculateScore = function() {
     const maxScore = 100;
@@ -102,6 +99,9 @@ scanSchema.methods.calculateScore = function() {
         this.puntuacion.calificacion = 'Crítico';
     }
 };
+
+// Modelo
+const Scan = mongoose.model('Scan', scanSchema);
 
 // Validación con Joi
 function validateScan(scan) {

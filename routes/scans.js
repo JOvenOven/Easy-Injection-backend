@@ -341,4 +341,84 @@ router.post('/:id/vulnerabilities', auth, async (req, res) => {
     }
 });
 
+// POST /api/scans/:id/start - Start a scan execution
+router.post('/:id/start', auth, async (req, res) => {
+    try {
+        const scan = await Scan.findOne({
+            _id: req.params.id,
+            usuario_id: req.user._id
+        });
+
+        if (!scan) {
+            return res.status(404).json({
+                success: false,
+                error: 'Escaneo no encontrado'
+            });
+        }
+
+        // Check if scan is already running
+        const socketService = require('../services/socketService');
+        if (socketService.isScanning(scan._id.toString())) {
+            return res.status(400).json({
+                success: false,
+                error: 'El escaneo ya está en ejecución'
+            });
+        }
+
+        // Extract optional config from request body
+        const { dbms, customHeaders } = req.body;
+
+        res.json({
+            success: true,
+            message: 'Use WebSocket connection to start the scan',
+            scanId: scan._id,
+            config: {
+                dbms: dbms || 'auto',
+                customHeaders: customHeaders || ''
+            }
+        });
+    } catch (error) {
+        console.error('Error starting scan:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error interno del servidor'
+        });
+    }
+});
+
+// GET /api/scans/:id/status - Get current scan status
+router.get('/:id/status', auth, async (req, res) => {
+    try {
+        const scan = await Scan.findOne({
+            _id: req.params.id,
+            usuario_id: req.user._id
+        });
+
+        if (!scan) {
+            return res.status(404).json({
+                success: false,
+                error: 'Escaneo no encontrado'
+            });
+        }
+
+        const socketService = require('../services/socketService');
+        const status = socketService.getScanStatus(scan._id.toString());
+
+        res.json({
+            success: true,
+            status: status || {
+                scanId: scan._id,
+                isRunning: false,
+                dbStatus: scan.estado
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching scan status:', error);
+        res.status(500).json({
+            success: false,
+            error: 'Error interno del servidor'
+        });
+    }
+});
+
 module.exports = router;
