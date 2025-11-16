@@ -1,23 +1,25 @@
 const express = require('express');
 const auth = require('../middleware/auth');
-const { Scan } = require('../models/escaneo');
-const { Vulnerability } = require('../models/vulnerabilidad');
-const { VulnerabilityType } = require('../models/tipo_vulnerabilidad');
-const { NivelSeveridad } = require('../models/nivel_severidad');
+const Scan = require('../models/escaneo');
+const Vulnerability = require('../models/vulnerabilidad');
+const VulnerabilityType = require('../models/tipo_vulnerabilidad');
+const SeverityLevel = require('../models/nivel_severidad');
 const router = express.Router();
 
 // GET /api/scans - Get all scans for the authenticated user
 router.get('/', auth, async (req, res) => {
     try {
-        const scans = await Scan.find({ usuario_id: req.user._id })
+        const scanDocs = await Scan.Model.find({ usuario_id: req.user._id })
             .populate('vulnerabilidades')
             .sort({ fecha_inicio: -1 });
+        const scans = scanDocs.map(doc => new Scan(doc.toObject()));
 
         // Get vulnerability counts and types for each scan
         const scansWithDetails = await Promise.all(scans.map(async (scan) => {
-            const vulnerabilities = await Vulnerability.find({ escaneo_id: scan._id })
+            const vulnDocs = await Vulnerability.Model.find({ escaneo_id: scan._id })
                 .populate('tipo_id', 'nombre')
                 .populate('nivel_severidad_id', 'nombre nivel');
+            const vulnerabilities = vulnDocs.map(doc => doc.toObject());
 
             const vulnerabilityCount = vulnerabilities.length;
             const vulnerabilityTypes = [...new Set(vulnerabilities.map(v => v.tipo_id?.nombre).filter(Boolean))];
@@ -66,9 +68,10 @@ router.get('/:id', auth, async (req, res) => {
         }
 
         // Get detailed vulnerabilities
-        const vulnerabilities = await Vulnerability.find({ escaneo_id: scan._id })
+        const vulnDocs = await Vulnerability.Model.find({ escaneo_id: scan._id })
             .populate('tipo_id', 'nombre descripcion')
             .populate('nivel_severidad_id', 'nombre nivel color');
+        const vulnerabilities = vulnDocs.map(doc => doc.toObject());
 
         res.json({
             success: true,
@@ -95,8 +98,8 @@ router.get('/:id', auth, async (req, res) => {
 // GET /api/scans/:id/report - Get complete scan report with vulnerabilities and quiz results
 router.get('/:id/report', auth, async (req, res) => {
     try {
-        const { Question } = require('../models/pregunta');
-        const { Answer } = require('../models/respuesta');
+        const Question = require('../models/pregunta');
+        const Answer = require('../models/respuesta');
 
         const scan = await Scan.findOne({ 
             _id: req.params.id, 
@@ -111,9 +114,10 @@ router.get('/:id/report', auth, async (req, res) => {
         }
 
         // Get detailed vulnerabilities with counts by severity
-        const vulnerabilities = await Vulnerability.find({ escaneo_id: scan._id })
+        const vulnDocs = await Vulnerability.Model.find({ escaneo_id: scan._id })
             .populate('tipo_id', 'nombre descripcion')
             .populate('nivel_severidad_id', 'nombre nivel color');
+        const vulnerabilities = vulnDocs.map(doc => doc.toObject());
 
         // Count vulnerabilities by severity
         const severityCounts = {
@@ -281,7 +285,7 @@ router.delete('/:id', auth, async (req, res) => {
         }
 
         // Also delete associated vulnerabilities
-        await Vulnerability.deleteMany({ escaneo_id: scan._id });
+        await Vulnerability.Model.deleteMany({ escaneo_id: scan._id });
 
         res.json({
             success: true,
@@ -315,7 +319,7 @@ router.post('/:id/vulnerabilities', auth, async (req, res) => {
         await vulnerability.save();
 
         // Update scan to include this vulnerability
-        await Scan.findByIdAndUpdate(req.params.id, {
+        await Scan.Model.findByIdAndUpdate(req.params.id, {
             $push: { vulnerabilidades: vulnerability._id }
         });
 

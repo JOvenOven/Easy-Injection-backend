@@ -1,6 +1,6 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
-const { User } = require('../models/usuario');
+const User = require('../models/usuario');
 const router = express.Router();
 
 // POST /api/login

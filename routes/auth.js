@@ -21,8 +21,9 @@ router.get('/verify', auth, async (req, res) => {
 // GET /api/auth/me - Get current user profile
 router.get('/me', auth, async (req, res) => {
     try {
-        const { User } = require('../models/usuario');
-        const user = await User.findById(req.user._id).select('-contrasena_hash -token_verificacion');
+        const User = require('../models/usuario');
+        const userDoc = await User.Model.findById(req.user._id).select('-contrasena_hash -token_verificacion');
+        const user = userDoc ? new User(userDoc.toObject()) : null;
         
         if (!user) {
             return res.status(404).json({ 

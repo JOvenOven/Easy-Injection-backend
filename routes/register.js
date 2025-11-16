@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const crypto = require('crypto');
-const { User, validate } = require('../models/usuario');
+const User = require('../models/usuario');
 const emailService = require('../services/emailService');
 const router = express.Router();
 
@@ -9,7 +9,7 @@ const router = express.Router();
 router.post('/', async (req, res) => {
     try {
         // Validate the request body
-        const { error } = validate(req.body);
+        const { error } = User.validate(req.body);
         if (error) {
             return res.status(400).json({ 
                 error: 'Datos de entrada inválidos',

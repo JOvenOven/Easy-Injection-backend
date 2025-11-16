@@ -6,8 +6,9 @@ const router = express.Router();
 // GET /api/user/profile - Get user profile
 router.get('/profile', auth, async (req, res) => {
     try {
-        const { User } = require('../models/usuario');
-        const user = await User.findById(req.user._id).select('-contrasena_hash -token_verificacion');
+        const User = require('../models/usuario');
+        const userDoc = await User.Model.findById(req.user._id).select('-contrasena_hash -token_verificacion');
+        const user = userDoc ? new User(userDoc.toObject()) : null;
         
         if (!user) {
             return res.status(404).json({ 
@@ -38,7 +39,7 @@ router.get('/profile', auth, async (req, res) => {
 // PUT /api/user/profile - Update user profile
 router.put('/profile', auth, async (req, res) => {
     try {
-        const { User } = require('../models/usuario');
+        const User = require('../models/usuario');
         const { username, email, avatarId } = req.body;
 
         // Validate required fields
@@ -86,11 +87,12 @@ router.put('/profile', auth, async (req, res) => {
             };
         }
 
-        const updatedUser = await User.findByIdAndUpdate(
+        const updatedUserDoc = await User.Model.findByIdAndUpdate(
             req.user._id,
             updateData,
             { new: true, select: '-contrasena_hash -token_verificacion' }
         );
+        const updatedUser = updatedUserDoc ? new User(updatedUserDoc.toObject()) : null;
 
         res.json({
             message: 'Perfil actualizado exitosamente',
@@ -116,7 +118,7 @@ router.put('/profile', auth, async (req, res) => {
 // PUT /api/user/password - Change password
 router.put('/password', auth, async (req, res) => {
     try {
-        const { User } = require('../models/usuario');
+        const User = require('../models/usuario');
         const { currentPassword, newPassword } = req.body;
 
         // Validate required fields

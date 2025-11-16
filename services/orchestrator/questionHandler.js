@@ -2,8 +2,8 @@
  * Question handler for educational questions during scans
  */
 
-const { Question } = require('../../models/pregunta');
-const { Answer } = require('../../models/respuesta');
+const Question = require('../../models/pregunta');
+const Answer = require('../../models/respuesta');
 
 class QuestionHandler {
     constructor(emitter, logger) {
@@ -54,7 +54,8 @@ class QuestionHandler {
             const question = questions[randomIndex];
             
             // Get all answers for this question
-            const answers = await Answer.find({ pregunta_id: question._id }).sort({ es_correcta: -1 });
+            const answerDocs = await Answer.Model.find({ pregunta_id: question._id }).sort({ es_correcta: -1 });
+            const answers = answerDocs.map(doc => new Answer(doc.toObject()));
             
             if (answers.length === 0) {
                 this.logger.addLog(`No se encontraron respuestas para la pregunta: ${question.texto_pregunta}`, 'warning');
