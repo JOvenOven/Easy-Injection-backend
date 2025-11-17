@@ -1,133 +1,80 @@
 const Joi = require('joi');
 const mongoose = require('mongoose');
+const debug = require('debug')('easyinjection:models:answer');
+const BaseModel = require('./base/BaseModel');
+const { buildObject } = require('./base/ModelHelpers');
 
-// Schema de respuestas
 const answerSchema = new mongoose.Schema({
     pregunta_id: { type: mongoose.Schema.Types.ObjectId, ref: 'Question', required: true },
     texto_respuesta: { type: String, required: true },
     es_correcta: { type: Boolean, default: false }
 });
 
-// Modelo de Mongoose
-// Check if model already exists to avoid overwriting
 const AnswerModel = mongoose.models.Answer || mongoose.model('Answer', answerSchema);
 
-// Clase de dominio
-class Answer {
+class Answer extends BaseModel {
+    #pregunta_id; #texto_respuesta; #es_correcta;
+
     constructor(data = {}) {
-        // Handle Mongoose document or plain object
+        super(data);
         const plainData = data && typeof data.toObject === 'function' ? data.toObject() : data;
-        
-        this.pregunta_id = plainData.pregunta_id;
-        this.texto_respuesta = plainData.texto_respuesta;
-        this.es_correcta = plainData.es_correcta !== undefined ? plainData.es_correcta : false;
-        
-        // Copy Mongoose-specific fields
-        if (plainData._id) this._id = plainData._id;
-        if (plainData.__v !== undefined) this.__v = plainData.__v;
+        this.#pregunta_id = plainData.pregunta_id;
+        this.#texto_respuesta = plainData.texto_respuesta;
+        this.#es_correcta = plainData.es_correcta !== undefined ? plainData.es_correcta : false;
     }
 
-    // Método estático de validación
+    get pregunta_id() { return this.#pregunta_id; }
+    set pregunta_id(value) {
+        if (!value) throw new Error('El ID de la pregunta es obligatorio');
+        this.#pregunta_id = value;
+    }
+
+    get texto_respuesta() { return this.#texto_respuesta; }
+    set texto_respuesta(value) {
+        if (!value || value.trim().length === 0) throw new Error('El texto de la respuesta es obligatorio');
+        this.#texto_respuesta = value;
+    }
+
+    get es_correcta() { return this.#es_correcta; }
+    set es_correcta(value) { this.#es_correcta = Boolean(value); }
+
+    isCorrect() { return this.#es_correcta === true; }
+    isIncorrect() { return this.#es_correcta === false; }
+    getDisplayText() { return this.#texto_respuesta; }
+
+    getPoints(questionPoints, questionDifficulty) {
+        if (!this.#es_correcta) return 0;
+        const multipliers = { 'facil': 1.0, 'media': 1.5, 'dificil': 2.0 };
+        const multiplier = multipliers[questionDifficulty] || 1.0;
+        return Math.round(questionPoints * multiplier);
+    }
+
+    markAsCorrect() { this.#es_correcta = true; }
+    markAsIncorrect() { this.#es_correcta = false; }
+
+    static createEmpty(preguntaId) { return new Answer({ pregunta_id: preguntaId, texto_respuesta: '', es_correcta: false }); }
+    static createCorrect(preguntaId, texto) { return new Answer({ pregunta_id: preguntaId, texto_respuesta: texto, es_correcta: true }); }
+    static createIncorrect(preguntaId, texto) { return new Answer({ pregunta_id: preguntaId, texto_respuesta: texto, es_correcta: false }); }
+
     static validate(answer) {
-        const schema = Joi.object({
+        return Joi.object({
             pregunta_id: Joi.string().required(),
             texto_respuesta: Joi.string().required(),
             es_correcta: Joi.boolean()
-        });
-
-        return schema.validate(answer);
+        }).validate(answer);
     }
 
-    // Método de instancia para guardar
-    async save() {
-        if (this._id) {
-            // Update existing document
-            const updateData = this.toObject();
-            // Remove _id and __v from update data (Mongoose handles these)
-            delete updateData._id;
-            delete updateData.__v;
-            
-            const updated = await AnswerModel.findByIdAndUpdate(
-                this._id,
-                { $set: updateData },
-                { new: true, runValidators: true }
-            );
-            
-            if (!updated) {
-                throw new Error(`Answer with _id ${this._id} not found`);
-            }
-            
-            // Update instance with saved data
-            this._id = updated._id;
-            this.__v = updated.__v;
-            return updated;
-        } else {
-            // Insert new document
-            const doc = new AnswerModel(this.toObject());
-            const saved = await doc.save();
-            // Update instance with saved data
-            this._id = saved._id;
-            this.__v = saved.__v;
-            return saved;
-        }
+    static async findCorrectAnswer(preguntaId) {
+        const doc = await AnswerModel.findOne({ pregunta_id: preguntaId, es_correcta: true });
+        return Answer.fromMongoose(doc);
     }
 
-    // Exponer el modelo de Mongoose para queries complejas (populate, select, etc.)
-    static get Model() {
-        if (!AnswerModel) {
-            throw new Error('AnswerModel is not initialized. Make sure mongoose is connected.');
-        }
-        return AnswerModel;
-    }
+    static get Model() { return AnswerModel; }
+    static get debug() { return debug; }
 
-    // Métodos estáticos de consulta
-    static async find(query = {}) {
-        if (!AnswerModel) {
-            throw new Error('AnswerModel is not initialized. Make sure mongoose is connected.');
-        }
-        const docs = await AnswerModel.find(query);
-        return docs.map(doc => new Answer(doc.toObject()));
-    }
-
-    static async findOne(query) {
-        const doc = await AnswerModel.findOne(query);
-        return doc ? new Answer(doc.toObject()) : null;
-    }
-
-    static async findById(id) {
-        const doc = await AnswerModel.findById(id);
-        return doc ? new Answer(doc.toObject()) : null;
-    }
-
-    static async findByIdAndUpdate(id, update, options = {}) {
-        const doc = await AnswerModel.findByIdAndUpdate(id, update, { new: true, ...options });
-        return doc ? new Answer(doc.toObject()) : null;
-    }
-
-    static async findByIdAndDelete(id) {
-        const doc = await AnswerModel.findByIdAndDelete(id);
-        return doc ? new Answer(doc.toObject()) : null;
-    }
-
-    static async create(data) {
-        const doc = new AnswerModel(data);
-        const saved = await doc.save();
-        return new Answer(saved.toObject());
-    }
-
-    // Método para convertir a objeto plano (útil para compatibilidad)
-    toObject() {
-        const obj = {};
-        
-        // Only include defined fields
-        if (this._id !== undefined) obj._id = this._id;
-        if (this.pregunta_id !== undefined) obj.pregunta_id = this.pregunta_id;
-        if (this.texto_respuesta !== undefined) obj.texto_respuesta = this.texto_respuesta;
-        if (this.es_correcta !== undefined) obj.es_correcta = this.es_correcta;
-        if (this.__v !== undefined) obj.__v = this.__v;
-        
-        return obj;
-    }
+    toObject() { return buildObject(this, ['pregunta_id', 'texto_respuesta', 'es_correcta']); }
+    toDTO() { return { id: this._id, preguntaId: this.#pregunta_id, texto: this.#texto_respuesta, esCorrecta: this.#es_correcta, displayText: this.getDisplayText() }; }
+    toString() { return `${this.#es_correcta ? '✓' : '✗'} ${this.#texto_respuesta}`; }
 }
 
 module.exports = Answer;

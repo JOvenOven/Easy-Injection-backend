@@ -1,11 +1,13 @@
 const express = require('express');
 const bcrypt = require('bcrypt');
 const auth = require('../middleware/auth');
+const debug = require('debug')('easyinjection:routes:user');
 const router = express.Router();
 
 // GET /api/user/profile - Get user profile
 router.get('/profile', auth, async (req, res) => {
     try {
+        debug('GET /profile - userId: %s', req.user._id);
         const User = require('../models/usuario');
         const userDoc = await User.Model.findById(req.user._id).select('-contrasena_hash -token_verificacion');
         const user = userDoc ? new User(userDoc.toObject()) : null;
@@ -16,6 +18,11 @@ router.get('/profile', auth, async (req, res) => {
             });
         }
 
+        // Convert Profile Value Object to plain object
+        const perfilPlain = user.perfil && typeof user.perfil.toObject === 'function' 
+            ? user.perfil.toObject() 
+            : user.perfil;
+
         res.json({
             user: {
                 _id: user._id,
@@ -25,7 +32,7 @@ router.get('/profile', auth, async (req, res) => {
                 ultimo_login: user.ultimo_login,
                 estado_cuenta: user.estado_cuenta,
                 email_verificado: user.email_verificado,
-                perfil: user.perfil
+                perfil: perfilPlain
             }
         });
     } catch (error) {
@@ -39,6 +46,8 @@ router.get('/profile', auth, async (req, res) => {
 // PUT /api/user/profile - Update user profile
 router.put('/profile', auth, async (req, res) => {
     try {
+        debug('PUT /profile - userId: %s, new username: %s, avatarId: %s', req.user._id, req.body.username, req.body.avatarId);
+        debug('PUT /profile - Full request body: %O', req.body);
         const User = require('../models/usuario');
         const { username, email, avatarId } = req.body;
 
@@ -81,18 +90,36 @@ router.put('/profile', auth, async (req, res) => {
 
         // Add avatar if provided
         if (avatarId) {
-            updateData.perfil = {
-                ...req.user.perfil,
-                avatarId: avatarId
-            };
+            debug('PUT /profile - Avatar provided: %s (type: %s)', avatarId, typeof avatarId);
+            
+            // Validate avatar format (avatar1, avatar2, ..., avatar6)
+            const validAvatars = ['avatar1', 'avatar2', 'avatar3', 'avatar4', 'avatar5', 'avatar6'];
+            if (validAvatars.includes(avatarId)) {
+                updateData['perfil.avatarId'] = avatarId;
+                debug('PUT /profile - updateData with avatar: %O', updateData);
+            } else {
+                debug('PUT /profile - Invalid avatar ID: %s', avatarId);
+                return res.status(400).json({ error: 'Avatar ID debe ser avatar1, avatar2, ..., avatar6' });
+            }
+        } else {
+            debug('PUT /profile - No avatar provided');
         }
 
+        debug('PUT /profile - About to update user with data: %O', updateData);
         const updatedUserDoc = await User.Model.findByIdAndUpdate(
             req.user._id,
             updateData,
             { new: true, select: '-contrasena_hash -token_verificacion' }
         );
+        debug('PUT /profile - User updated successfully, new profile: %O', updatedUserDoc?.perfil);
         const updatedUser = updatedUserDoc ? new User(updatedUserDoc.toObject()) : null;
+
+        // Convert Profile Value Object to plain object
+        const perfilPlain = updatedUser.perfil && typeof updatedUser.perfil.toObject === 'function' 
+            ? updatedUser.perfil.toObject() 
+            : updatedUser.perfil;
+        
+        debug('PUT /profile - Sending response with perfil: %O', perfilPlain);
 
         res.json({
             message: 'Perfil actualizado exitosamente',
@@ -104,7 +131,7 @@ router.put('/profile', auth, async (req, res) => {
                 ultimo_login: updatedUser.ultimo_login,
                 estado_cuenta: updatedUser.estado_cuenta,
                 email_verificado: updatedUser.email_verificado,
-                perfil: updatedUser.perfil
+                perfil: perfilPlain
             }
         });
     } catch (error) {

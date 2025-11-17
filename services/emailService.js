@@ -1,5 +1,6 @@
 const nodemailer = require('nodemailer');
 const config = require('config');
+const debug = require('debug')('easyinjection:services:email');
 
 class EmailService {
     constructor() {
@@ -13,6 +14,7 @@ class EmailService {
     }
 
     async sendVerificationEmail(email, username, verificationToken) {
+        debug('sendVerificationEmail: sending to %s (user: %s)', email, username);
         const verificationUrl = `${config.get('baseUrlFrontend')}verify-success?token=${verificationToken}`;
         
         const mailOptions = {
@@ -49,9 +51,11 @@ class EmailService {
 
         try {
             await this.transporter.sendMail(mailOptions);
+            debug('Email sent successfully to: %s', email);
             console.log(`Email de verificación enviado a: ${email}`);
             return true;
         } catch (error) {
+            debug('Error sending email to %s: %O', email, error);
             console.error('Error enviando email de verificación:', error);
             return false;
         }

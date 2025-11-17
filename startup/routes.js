@@ -7,8 +7,10 @@ const auth = require('../routes/auth');
 const user = require('../routes/user');
 const scans = require('../routes/scans');
 const error = require('../middleware/error');
+const debug = require('debug')('easyinjection:startup:routes');
 
 module.exports = function(app) {
+    debug('Setting up routes and middleware...');
     // Using middleware
     app.use(cors());
     app.use(express.json());

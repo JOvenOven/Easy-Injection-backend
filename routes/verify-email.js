@@ -2,11 +2,13 @@ const express = require('express');
 const crypto = require('crypto');
 const User = require('../models/usuario');
 const emailService = require('../services/emailService');
+const debug = require('debug')('easyinjection:routes:verify-email');
 const router = express.Router();
 
 // POST /api/verify-email
 router.post('/', async (req, res) => {
     try {
+        debug('POST /verify-email - token received');
         const { token } = req.body;
         
         if (!token) {
@@ -16,24 +18,34 @@ router.post('/', async (req, res) => {
         }
 
         // Find user by verification token
+        debug('Looking for user with token...');
         const user = await User.findOne({ 
             token_verificacion: token,
             fecha_expiracion_token: { $gt: new Date() }
         });
 
+        debug('User found: %s', user ? 'YES' : 'NO');
         if (!user) {
+            debug('Token invalid or expired');
             return res.status(400).json({ 
                 error: 'Token de verificación inválido o expirado' 
             });
         }
 
+        debug('User found: %s, current estado_cuenta: %s, email_verificado: %s', 
+            user.username, user.estado_cuenta, user.email_verificado);
+
         // Update user verification status
+        debug('Updating user verification status...');
         user.email_verificado = true;
         user.estado_cuenta = 'activo';
         user.token_verificacion = undefined;
         user.fecha_expiracion_token = undefined;
 
+        debug('Saving user changes...');
         await user.save();
+        debug('User verified successfully. New estado_cuenta: %s, email_verificado: %s', 
+            user.estado_cuenta, user.email_verificado);
 
         res.json({
             message: 'Email verificado exitosamente',
@@ -58,20 +70,28 @@ router.post('/', async (req, res) => {
 router.get('/:token', async (req, res) => {
     try {
         const { token } = req.params;
+        debug('GET /verify-email/:token - token received');
         
         // Find user by verification token
+        debug('Looking for user with token...');
         const user = await User.findOne({ 
             token_verificacion: token,
             fecha_expiracion_token: { $gt: new Date() }
         });
 
+        debug('User found: %s', user ? 'YES' : 'NO');
         if (!user) {
+            debug('Token invalid or expired');
             return res.status(400).json({ 
                 error: 'Token de verificación inválido o expirado' 
             });
         }
 
+        debug('User found: %s, current estado_cuenta: %s, email_verificado: %s', 
+            user.username, user.estado_cuenta, user.email_verificado);
+
         // Update user verification status
+        debug('Updating user verification status...');
         user.email_verificado = true;
         user.estado_cuenta = 'activo';
         user.token_verificacion = undefined;

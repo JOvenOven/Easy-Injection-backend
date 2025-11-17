@@ -4,11 +4,13 @@ const Scan = require('../models/escaneo');
 const Vulnerability = require('../models/vulnerabilidad');
 const VulnerabilityType = require('../models/tipo_vulnerabilidad');
 const SeverityLevel = require('../models/nivel_severidad');
+const debug = require('debug')('easyinjection:routes:scans');
 const router = express.Router();
 
 // GET /api/scans - Get all scans for the authenticated user
 router.get('/', auth, async (req, res) => {
     try {
+        debug('GET /scans - userId: %s', req.user._id);
         const scanDocs = await Scan.Model.find({ usuario_id: req.user._id })
             .populate('vulnerabilidades')
             .sort({ fecha_inicio: -1 });
@@ -24,6 +26,11 @@ router.get('/', auth, async (req, res) => {
             const vulnerabilityCount = vulnerabilities.length;
             const vulnerabilityTypes = [...new Set(vulnerabilities.map(v => v.tipo_id?.nombre).filter(Boolean))];
 
+            // Convert Value Objects to plain objects
+            const flagsPlain = scan.flags && typeof scan.flags.toObject === 'function'
+                ? scan.flags.toObject()
+                : scan.flags;
+
             return {
                 _id: scan._id,
                 alias: scan.alias,
@@ -31,7 +38,7 @@ router.get('/', auth, async (req, res) => {
                 fecha_inicio: scan.fecha_inicio,
                 fecha_fin: scan.fecha_fin,
                 estado: scan.estado,
-                flags: scan.flags,
+                flags: flagsPlain,
                 vulnerabilidades: {
                     count: vulnerabilityCount,
                     types: vulnerabilityTypes
@@ -55,6 +62,7 @@ router.get('/', auth, async (req, res) => {
 // GET /api/scans/:id - Get specific scan details
 router.get('/:id', auth, async (req, res) => {
     try {
+        debug('GET /scans/:id - scanId: %s, userId: %s', req.params.id, req.user._id);
         const scan = await Scan.findOne({ 
             _id: req.params.id, 
             usuario_id: req.user._id 
@@ -73,6 +81,11 @@ router.get('/:id', auth, async (req, res) => {
             .populate('nivel_severidad_id', 'nombre nivel color');
         const vulnerabilities = vulnDocs.map(doc => doc.toObject());
 
+        // Convert Value Objects to plain objects
+        const flagsPlain = scan.flags && typeof scan.flags.toObject === 'function'
+            ? scan.flags.toObject()
+            : scan.flags;
+
         res.json({
             success: true,
             scan: {
@@ -82,7 +95,7 @@ router.get('/:id', auth, async (req, res) => {
                 fecha_inicio: scan.fecha_inicio,
                 fecha_fin: scan.fecha_fin,
                 estado: scan.estado,
-                flags: scan.flags,
+                flags: flagsPlain,
                 vulnerabilidades: vulnerabilities
             }
         });
@@ -141,24 +154,58 @@ router.get('/:id/report', auth, async (req, res) => {
         });
 
         // Populate quiz questions and answers
+        debug('Processing quiz results - Total answers: %s', scan.respuestas_usuario?.length || 0);
         const quizResults = [];
         if (scan.respuestas_usuario && scan.respuestas_usuario.length > 0) {
-            for (const userAnswer of scan.respuestas_usuario) {
-                const question = await Question.findById(userAnswer.pregunta_id);
-                const allAnswers = await Answer.find({ pregunta_id: userAnswer.pregunta_id });
-                const selectedAnswer = await Answer.findById(userAnswer.respuesta_seleccionada_id);
+            for (let i = 0; i < scan.respuestas_usuario.length; i++) {
+                const userAnswer = scan.respuestas_usuario[i];
+                debug('Processing answer %s - pregunta_id: %s, respuesta_id: %s', 
+                    i + 1, userAnswer.pregunta_id, userAnswer.respuesta_seleccionada_id);
+                
+                const questionDoc = await Question.findById(userAnswer.pregunta_id);
+                debug('Question found: %s, texto: %s', questionDoc ? 'YES' : 'NO', questionDoc?.texto_pregunta);
+                const question = questionDoc ? new Question(questionDoc.toObject()) : null;
+                
+                const allAnswersDocs = await Answer.find({ pregunta_id: userAnswer.pregunta_id });
+                debug('Answers found: %s answers', allAnswersDocs?.length || 0);
+                const allAnswers = allAnswersDocs.map(doc => new Answer(doc.toObject()));
+                
+                const selectedAnswerDoc = await Answer.findById(userAnswer.respuesta_seleccionada_id);
+                debug('Selected answer found: %s', selectedAnswerDoc ? 'YES' : 'NO');
+                const selectedAnswer = selectedAnswerDoc ? new Answer(selectedAnswerDoc.toObject()) : null;
+                
                 const correctAnswer = allAnswers.find(a => a.es_correcta);
+                debug('Correct answer found: %s', correctAnswer ? 'YES' : 'NO');
+
+                // Convert to plain objects for response
+                const questionPlain = question ? question.toObject() : null;
+                const answersPlain = allAnswers.map(a => a.toObject());
+                const selectedPlain = selectedAnswer ? selectedAnswer.toObject() : null;
+                const correctPlain = correctAnswer ? correctAnswer.toObject() : null;
+
+                debug('Question plain object: %O', questionPlain);
+                debug('Selected answer plain: %O', selectedPlain);
 
                 quizResults.push({
-                    pregunta: question,
-                    respuestas: allAnswers,
-                    respuesta_seleccionada: selectedAnswer,
-                    respuesta_correcta: correctAnswer,
+                    pregunta: questionPlain,
+                    respuestas: answersPlain,
+                    respuesta_seleccionada: selectedPlain,
+                    respuesta_correcta: correctPlain,
                     es_correcta: userAnswer.es_correcta,
                     puntos_obtenidos: userAnswer.puntos_obtenidos
                 });
             }
         }
+        debug('Quiz results processed: %s questions', quizResults.length);
+
+        // Convert Value Objects to plain objects
+        const flagsPlain = scan.flags && typeof scan.flags.toObject === 'function'
+            ? scan.flags.toObject()
+            : scan.flags;
+        
+        const puntuacionPlain = scan.puntuacion && typeof scan.puntuacion.toObject === 'function'
+            ? scan.puntuacion.toObject()
+            : scan.puntuacion;
 
         res.json({
             success: true,
@@ -170,7 +217,7 @@ router.get('/:id/report', auth, async (req, res) => {
                     fecha_inicio: scan.fecha_inicio,
                     fecha_fin: scan.fecha_fin,
                     estado: scan.estado,
-                    flags: scan.flags
+                    flags: flagsPlain
                 },
                 vulnerabilidades: vulnerabilities,
                 resumen_vulnerabilidades: {
@@ -178,7 +225,7 @@ router.get('/:id/report', auth, async (req, res) => {
                     por_severidad: severityCounts
                 },
                 cuestionario: quizResults,
-                puntuacion: scan.puntuacion
+                puntuacion: puntuacionPlain
             }
         });
     } catch (error) {
@@ -193,6 +240,8 @@ router.get('/:id/report', auth, async (req, res) => {
 // POST /api/scans - Create a new scan
 router.post('/', auth, async (req, res) => {
     try {
+        debug('POST /scans - userId: %s', req.user._id);
+        debug('POST /scans - Request body: %O', req.body);
         const { alias, url, flags, tipo_autenticacion, credenciales } = req.body;
 
         const scan = new Scan({
@@ -205,7 +254,14 @@ router.post('/', auth, async (req, res) => {
             estado: 'pendiente'
         });
 
+        debug('POST /scans - Saving new scan...');
         await scan.save();
+        debug('POST /scans - Scan saved with _id: %s', scan._id);
+
+        // Convert Value Objects to plain objects
+        const flagsPlain = scan.flags && typeof scan.flags.toObject === 'function'
+            ? scan.flags.toObject()
+            : scan.flags;
 
         res.status(201).json({
             success: true,
@@ -215,7 +271,7 @@ router.post('/', auth, async (req, res) => {
                 url: scan.url,
                 fecha_inicio: scan.fecha_inicio,
                 estado: scan.estado,
-                flags: scan.flags
+                flags: flagsPlain
             }
         });
     } catch (error) {
@@ -248,6 +304,11 @@ router.put('/:id', auth, async (req, res) => {
             });
         }
 
+        // Convert Value Objects to plain objects
+        const flagsPlain = scan.flags && typeof scan.flags.toObject === 'function'
+            ? scan.flags.toObject()
+            : scan.flags;
+
         res.json({
             success: true,
             scan: {
@@ -257,7 +318,7 @@ router.put('/:id', auth, async (req, res) => {
                 fecha_inicio: scan.fecha_inicio,
                 fecha_fin: scan.fecha_fin,
                 estado: scan.estado,
-                flags: scan.flags
+                flags: flagsPlain
             }
         });
     } catch (error) {

@@ -1,145 +1,100 @@
 const Joi = require('joi');
 const mongoose = require('mongoose');
+const debug = require('debug')('easyinjection:models:question');
+const BaseModel = require('./base/BaseModel');
+const { buildObject } = require('./base/ModelHelpers');
 
-// Schema de preguntas
 const questionSchema = new mongoose.Schema({
     texto_pregunta: { type: String, required: true },
-    dificultad: { 
-        type: String, 
-        enum: ['facil', 'media', 'dificil'], 
-        required: true 
-    },
+    dificultad: { type: String, enum: ['facil', 'media', 'dificil'], required: true },
     puntos: { type: Number, required: true },
-    fase: {
-        type: String,
-        enum: ['init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss'],
-        required: true
-    }
+    fase: { type: String, enum: ['init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss'], required: true }
 });
 
-// Modelo de Mongoose
-// Check if model already exists to avoid overwriting
 const QuestionModel = mongoose.models.Question || mongoose.model('Question', questionSchema);
 
-// Clase de dominio
-class Question {
+class Question extends BaseModel {
+    #texto_pregunta; #dificultad; #puntos; #fase;
+
     constructor(data = {}) {
-        // Handle Mongoose document or plain object
+        super(data);
         const plainData = data && typeof data.toObject === 'function' ? data.toObject() : data;
-        
-        this.texto_pregunta = plainData.texto_pregunta;
-        this.dificultad = plainData.dificultad;
-        this.puntos = plainData.puntos;
-        this.fase = plainData.fase;
-        
-        // Copy Mongoose-specific fields
-        if (plainData._id) this._id = plainData._id;
-        if (plainData.__v !== undefined) this.__v = plainData.__v;
+        this.#texto_pregunta = plainData.texto_pregunta;
+        this.#dificultad = plainData.dificultad;
+        this.#puntos = plainData.puntos;
+        this.#fase = plainData.fase;
     }
 
-    // Método estático de validación
+    get texto_pregunta() { return this.#texto_pregunta; }
+    set texto_pregunta(value) {
+        if (!value || value.trim().length === 0) throw new Error('El texto de la pregunta es obligatorio');
+        this.#texto_pregunta = value;
+    }
+
+    get dificultad() { return this.#dificultad; }
+    set dificultad(value) {
+        if (!['facil', 'media', 'dificil'].includes(value)) throw new Error('Dificultad inválida. Debe ser facil, media o dificil');
+        this.#dificultad = value;
+    }
+
+    get puntos() { return this.#puntos; }
+    set puntos(value) {
+        if (typeof value !== 'number' || value < 1) throw new Error('Los puntos deben ser un número mayor o igual a 1');
+        this.#puntos = value;
+    }
+
+    get fase() { return this.#fase; }
+    set fase(value) {
+        const validValues = ['init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss'];
+        if (!validValues.includes(value)) throw new Error('Fase inválida');
+        this.#fase = value;
+    }
+
+    getDifficultyMultiplier() {
+        return { 'facil': 1.0, 'media': 1.5, 'dificil': 2.0 }[this.#dificultad] || 1.0;
+    }
+
+    getPhaseCategory() {
+        if (['sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli'].includes(this.#fase)) return 'sqli';
+        if (['xss-context', 'xss-fuzzing', 'xss'].includes(this.#fase)) return 'xss';
+        return 'general';
+    }
+
+    isForPhase(phase) { return this.#fase === phase; }
+    getAdjustedPoints() { return Math.round(this.#puntos * this.getDifficultyMultiplier()); }
+    isSQLiQuestion() { return this.getPhaseCategory() === 'sqli'; }
+    isXSSQuestion() { return this.getPhaseCategory() === 'xss'; }
+    getDisplayDifficulty() { return { 'facil': 'Fácil', 'media': 'Media', 'dificil': 'Difícil' }[this.#dificultad] || this.#dificultad; }
+
+    static createEmpty() { return new Question({ texto_pregunta: '', dificultad: 'facil', puntos: 10, fase: 'init' }); }
+    static forPhase(phase, difficulty = 'facil') { return new Question({ texto_pregunta: '', dificultad: difficulty, puntos: 10, fase: phase }); }
     static validate(question) {
-        const schema = Joi.object({
+        return Joi.object({
             texto_pregunta: Joi.string().required(),
             dificultad: Joi.string().valid('facil', 'media', 'dificil').required(),
             puntos: Joi.number().min(1).required(),
             fase: Joi.string().valid('init', 'discovery', 'parameters', 'sqli-detection', 'sqli-fingerprint', 'sqli-exploit', 'sqli', 'xss-context', 'xss-fuzzing', 'xss').required()
-        });
-
-        return schema.validate(question);
+        }).validate(question);
     }
 
-    // Método de instancia para guardar
-    async save() {
-        if (this._id) {
-            // Update existing document
-            const updateData = this.toObject();
-            // Remove _id and __v from update data (Mongoose handles these)
-            delete updateData._id;
-            delete updateData.__v;
-            
-            const updated = await QuestionModel.findByIdAndUpdate(
-                this._id,
-                { $set: updateData },
-                { new: true, runValidators: true }
-            );
-            
-            if (!updated) {
-                throw new Error(`Question with _id ${this._id} not found`);
-            }
-            
-            // Update instance with saved data
-            this._id = updated._id;
-            this.__v = updated.__v;
-            return updated;
-        } else {
-            // Insert new document
-            const doc = new QuestionModel(this.toObject());
-            const saved = await doc.save();
-            // Update instance with saved data
-            this._id = saved._id;
-            this.__v = saved.__v;
-            return saved;
-        }
+    static async random(phase) {
+        debug('random: getting random question for phase %s', phase);
+        const count = await QuestionModel.countDocuments({ fase: phase });
+        if (count === 0) return null;
+        const random = Math.floor(Math.random() * count);
+        const doc = await QuestionModel.findOne({ fase: phase }).skip(random);
+        return Question.fromMongoose(doc);
     }
 
-    // Exponer el modelo de Mongoose para queries complejas (populate, select, etc.)
-    static get Model() {
-        if (!QuestionModel) {
-            throw new Error('QuestionModel is not initialized. Make sure mongoose is connected.');
-        }
-        return QuestionModel;
-    }
+    static get Model() { return QuestionModel; }
+    static get debug() { return debug; }
 
-    // Métodos estáticos de consulta
-    static async find(query = {}) {
-        if (!QuestionModel) {
-            throw new Error('QuestionModel is not initialized. Make sure mongoose is connected.');
-        }
-        const docs = await QuestionModel.find(query);
-        return docs.map(doc => new Question(doc.toObject()));
+    toObject() { return buildObject(this, ['texto_pregunta', 'dificultad', 'puntos', 'fase']); }
+    toDTO() {
+        return { id: this._id, texto: this.#texto_pregunta, dificultad: this.#dificultad, displayDifficulty: this.getDisplayDifficulty(),
+            puntos: this.#puntos, puntosAjustados: this.getAdjustedPoints(), fase: this.#fase, categoria: this.getPhaseCategory(), multiplicador: this.getDifficultyMultiplier() };
     }
-
-    static async findOne(query) {
-        const doc = await QuestionModel.findOne(query);
-        return doc ? new Question(doc.toObject()) : null;
-    }
-
-    static async findById(id) {
-        const doc = await QuestionModel.findById(id);
-        return doc ? new Question(doc.toObject()) : null;
-    }
-
-    static async findByIdAndUpdate(id, update, options = {}) {
-        const doc = await QuestionModel.findByIdAndUpdate(id, update, { new: true, ...options });
-        return doc ? new Question(doc.toObject()) : null;
-    }
-
-    static async findByIdAndDelete(id) {
-        const doc = await QuestionModel.findByIdAndDelete(id);
-        return doc ? new Question(doc.toObject()) : null;
-    }
-
-    static async create(data) {
-        const doc = new QuestionModel(data);
-        const saved = await doc.save();
-        return new Question(saved.toObject());
-    }
-
-    // Método para convertir a objeto plano (útil para compatibilidad)
-    toObject() {
-        const obj = {};
-        
-        // Only include defined fields
-        if (this._id !== undefined) obj._id = this._id;
-        if (this.texto_pregunta !== undefined) obj.texto_pregunta = this.texto_pregunta;
-        if (this.dificultad !== undefined) obj.dificultad = this.dificultad;
-        if (this.puntos !== undefined) obj.puntos = this.puntos;
-        if (this.fase !== undefined) obj.fase = this.fase;
-        if (this.__v !== undefined) obj.__v = this.__v;
-        
-        return obj;
-    }
+    toString() { return `[${this.#dificultad.toUpperCase()}] ${this.#texto_pregunta.substring(0, 50)}... (${this.#puntos} pts - ${this.#fase})`; }
 }
 
 module.exports = Question;

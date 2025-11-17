@@ -1,6 +1,7 @@
 const jwt = require('jsonwebtoken');
 const config = require('config');
 const User = require('../models/usuario');
+const debug = require('debug')('easyinjection:middleware:auth');
 
 module.exports = async function (req, res, next) {
     // Obtener el header "Authorization"
@@ -18,6 +19,7 @@ module.exports = async function (req, res, next) {
 
     try {
         const decoded = jwt.verify(token, config.get('jwtPrivateKey'));
+        debug('Token verified for user: %s', decoded._id);
         
         // Verificar que el usuario aún existe y está activo
         const user = await User.findById(decoded._id);

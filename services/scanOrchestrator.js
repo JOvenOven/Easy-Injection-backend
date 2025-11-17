@@ -74,10 +74,18 @@ class ScanOrchestrator extends EventEmitter {
     constructor(scanId, scanConfig) {
         super();
         
+        console.log('[ORCHESTRATOR] Constructor called');
+        console.log('[ORCHESTRATOR] scanId:', scanId);
+        console.log('[ORCHESTRATOR] scanConfig:', JSON.stringify(scanConfig, null, 2));
+        
         // Validate and normalize configuration
         try {
+            console.log('[ORCHESTRATOR] Validating configuration...');
             this.config = validateAndNormalizeConfig(scanConfig);
+            console.log('[ORCHESTRATOR] Configuration validated successfully');
+            console.log('[ORCHESTRATOR] Normalized config:', JSON.stringify(this.config, null, 2));
         } catch (error) {
+            console.error('[ORCHESTRATOR] Configuration validation error:', error);
             throw new Error(`Configuración inválida: ${error.message}`);
         }
         
@@ -165,40 +173,64 @@ class ScanOrchestrator extends EventEmitter {
      * Start the scan process
      */
     async start() {
+        console.log('[ORCHESTRATOR] start() method called');
         try {
+            console.log('[ORCHESTRATOR] Resetting flags...');
             this.isStopped = false;
             this.isPaused = false;
+            console.log('[ORCHESTRATOR] Emitting scan:started event...');
             this.emit('scan:started', { scanId: this.scanId });
+            console.log('[ORCHESTRATOR] scan:started event emitted');
             
+            console.log('[ORCHESTRATOR] Running init phase...');
             if (this.isStopped) return;
             await this.runPhase('init');
+            console.log('[ORCHESTRATOR] Init phase completed');
             
+            console.log('[ORCHESTRATOR] Running discovery phase...');
             if (this.isStopped) return;
             await this.runPhase('discovery');
+            console.log('[ORCHESTRATOR] Discovery phase completed');
             
             if (this.config.flags.sqli && !this.isStopped) {
+                console.log('[ORCHESTRATOR] Running SQLi phase...');
                 await this.runPhase('sqli');
+                console.log('[ORCHESTRATOR] SQLi phase completed');
+            } else {
+                console.log('[ORCHESTRATOR] Skipping SQLi phase (disabled or stopped)');
             }
             
             if (this.config.flags.xss && !this.isStopped) {
+                console.log('[ORCHESTRATOR] Running XSS phase...');
                 await this.runPhase('xss');
+                console.log('[ORCHESTRATOR] XSS phase completed');
+            } else {
+                console.log('[ORCHESTRATOR] Skipping XSS phase (disabled or stopped)');
             }
             
             // Wait for all active processes to complete before generating report
             if (!this.isStopped) {
+                console.log('[ORCHESTRATOR] Waiting for all processes...');
                 await this.waitForAllProcesses();
+                console.log('[ORCHESTRATOR] Running report phase...');
                 await this.runPhase('report');
+                console.log('[ORCHESTRATOR] Report phase completed');
             }
             
             if (!this.isStopped) {
+                console.log('[ORCHESTRATOR] Emitting scan:completed event...');
                 this.emit('scan:completed', { 
                     scanId: this.scanId,
                     vulnerabilities: this.vulnerabilities,
                     questionResults: this.questionResults,
                     stats: this.stats
                 });
+                console.log('[ORCHESTRATOR] Scan completed successfully');
             }
         } catch (error) {
+            console.error('[ORCHESTRATOR] CRITICAL ERROR in start():', error);
+            console.error('[ORCHESTRATOR] Error message:', error.message);
+            console.error('[ORCHESTRATOR] Error stack:', error.stack);
             if (!this.isStopped) {
                 this.logger.addLog(`Error crítico: ${error.message}`, 'error');
                 this.emit('scan:error', { scanId: this.scanId, error: error.message });

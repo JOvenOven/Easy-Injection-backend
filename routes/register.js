@@ -3,11 +3,13 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const User = require('../models/usuario');
 const emailService = require('../services/emailService');
+const debug = require('debug')('easyinjection:routes:register');
 const router = express.Router();
 
 // POST /api/register
 router.post('/', async (req, res) => {
     try {
+        debug('POST /register - username: %s, email: %s', req.body.username, req.body.email);
         // Validate the request body
         const { error } = User.validate(req.body);
         if (error) {
@@ -26,6 +28,7 @@ router.post('/', async (req, res) => {
         });
 
         if (user) {
+            debug('User already exists - email or username taken');
             if (user.email === req.body.email) {
                 return res.status(400).json({ 
                     error: 'El email ya está registrado' 
@@ -48,6 +51,7 @@ router.post('/', async (req, res) => {
         expirationDate.setHours(expirationDate.getHours() + 24); // 24 hours from now
 
         // Create new user
+        debug('Creating new user with username: %s, email: %s', req.body.username, req.body.email);
         user = new User({
             username: req.body.username,
             email: req.body.email,
@@ -56,7 +60,10 @@ router.post('/', async (req, res) => {
             fecha_expiracion_token: expirationDate
         });
 
+        debug('Saving user to database...');
         await user.save();
+        debug('User saved successfully. User ID: %s, estado_cuenta: %s, email_verificado: %s', 
+            user._id, user.estado_cuenta, user.email_verificado);
 
         // Send verification email
         const emailSent = await emailService.sendVerificationEmail(

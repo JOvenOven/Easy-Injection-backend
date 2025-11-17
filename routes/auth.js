@@ -1,10 +1,12 @@
 const express = require('express');
 const auth = require('../middleware/auth');
+const debug = require('debug')('easyinjection:routes:auth');
 const router = express.Router();
 
 // GET /api/auth/verify - Verify token and get user info
 router.get('/verify', auth, async (req, res) => {
     try {
+        debug('GET /verify - userId: %s', req.user._id);
         // If we reach here, the token is valid and user is authenticated
         res.json({
             message: 'Token válido',
@@ -21,6 +23,7 @@ router.get('/verify', auth, async (req, res) => {
 // GET /api/auth/me - Get current user profile
 router.get('/me', auth, async (req, res) => {
     try {
+        debug('GET /me - userId: %s', req.user._id);
         const User = require('../models/usuario');
         const userDoc = await User.Model.findById(req.user._id).select('-contrasena_hash -token_verificacion');
         const user = userDoc ? new User(userDoc.toObject()) : null;

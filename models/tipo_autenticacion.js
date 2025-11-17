@@ -1,7 +1,9 @@
 const Joi = require('joi');
 const mongoose = require('mongoose');
+const debug = require('debug')('easyinjection:models:authtype');
+const BaseModel = require('./base/BaseModel');
+const { buildObject } = require('./base/ModelHelpers');
 
-// Schema de tipos_autenticacion
 const authTypeSchema = new mongoose.Schema({
     nombre: { 
         type: String, 
@@ -12,116 +14,103 @@ const authTypeSchema = new mongoose.Schema({
     descripcion: { type: String, maxlength: 255 }
 });
 
-// Modelo de Mongoose
-// Check if model already exists to avoid overwriting
 const AuthTypeModel = mongoose.models.AuthType || mongoose.model('AuthType', authTypeSchema);
 
-// Clase de dominio
-class AuthType {
+class AuthType extends BaseModel {
+    #nombre;
+    #descripcion;
+
     constructor(data = {}) {
-        // Handle Mongoose document or plain object
+        super(data);
         const plainData = data && typeof data.toObject === 'function' ? data.toObject() : data;
         
-        this.nombre = plainData.nombre;
-        this.descripcion = plainData.descripcion;
-        
-        // Copy Mongoose-specific fields
-        if (plainData._id) this._id = plainData._id;
-        if (plainData.__v !== undefined) this.__v = plainData.__v;
+        this.#nombre = plainData.nombre;
+        this.#descripcion = plainData.descripcion;
     }
 
-    // Método estático de validación
-    static validate(auth) {
+    get nombre() {
+        return this.#nombre;
+    }
+
+    set nombre(value) {
+        const validValues = ['usuario_password', 'token', 'oauth2', 'apikey'];
+        if (!validValues.includes(value)) {
+            throw new Error(`Tipo de autenticación inválido. Debe ser uno de: ${validValues.join(', ')}`);
+        }
+        this.#nombre = value;
+    }
+
+    get descripcion() {
+        return this.#descripcion;
+    }
+
+    set descripcion(value) {
+        if (value && value.length > 255) {
+            throw new Error('La descripción no puede exceder 255 caracteres');
+        }
+        this.#descripcion = value;
+    }
+
+    // Métodos de dominio
+    requiresCredentials() {
+        return this.#nombre === 'usuario_password';
+    }
+
+    isTokenBased() {
+        return ['token', 'oauth2', 'apikey'].includes(this.#nombre);
+    }
+
+    getDisplayName() {
+        const names = {
+            'usuario_password': 'Usuario y Contraseña',
+            'token': 'Token de Autenticación',
+            'oauth2': 'OAuth 2.0',
+            'apikey': 'API Key'
+        };
+        return names[this.#nombre] || this.#nombre;
+    }
+
+    getSecurityLevel() {
+        const levels = {
+            'usuario_password': 'Media',
+            'token': 'Alta',
+            'oauth2': 'Alta',
+            'apikey': 'Media'
+        };
+        return levels[this.#nombre] || 'Baja';
+    }
+
+    supportsMultiFactor() {
+        return ['usuario_password', 'oauth2'].includes(this.#nombre);
+    }
+
+    static createEmpty() {
+        return new AuthType({ nombre: 'usuario_password', descripcion: '' });
+    }
+
+    static validate(authType) {
         const schema = Joi.object({
             nombre: Joi.string().valid('usuario_password', 'token', 'oauth2', 'apikey').required(),
             descripcion: Joi.string().max(255)
         });
 
-        return schema.validate(auth);
+        return schema.validate(authType);
     }
 
-    // Método de instancia para guardar
-    async save() {
-        if (this._id) {
-            // Update existing document
-            const updateData = this.toObject();
-            // Remove _id and __v from update data (Mongoose handles these)
-            delete updateData._id;
-            delete updateData.__v;
-            
-            const updated = await AuthTypeModel.findByIdAndUpdate(
-                this._id,
-                { $set: updateData },
-                { new: true, runValidators: true }
-            );
-            
-            if (!updated) {
-                throw new Error(`AuthType with _id ${this._id} not found`);
-            }
-            
-            // Update instance with saved data
-            this._id = updated._id;
-            this.__v = updated.__v;
-            return updated;
-        } else {
-            // Insert new document
-            const doc = new AuthTypeModel(this.toObject());
-            const saved = await doc.save();
-            // Update instance with saved data
-            this._id = saved._id;
-            this.__v = saved.__v;
-            return saved;
-        }
-    }
-
-    // Exponer el modelo de Mongoose para queries complejas (populate, select, etc.)
     static get Model() {
         return AuthTypeModel;
     }
 
-    // Métodos estáticos de consulta
-    static async find(query = {}) {
-        const docs = await AuthTypeModel.find(query);
-        return docs.map(doc => new AuthType(doc.toObject()));
+    static get debug() {
+        return debug;
     }
 
-    static async findOne(query) {
-        const doc = await AuthTypeModel.findOne(query);
-        return doc ? new AuthType(doc.toObject()) : null;
-    }
-
-    static async findById(id) {
-        const doc = await AuthTypeModel.findById(id);
-        return doc ? new AuthType(doc.toObject()) : null;
-    }
-
-    static async findByIdAndUpdate(id, update, options = {}) {
-        const doc = await AuthTypeModel.findByIdAndUpdate(id, update, { new: true, ...options });
-        return doc ? new AuthType(doc.toObject()) : null;
-    }
-
-    static async findByIdAndDelete(id) {
-        const doc = await AuthTypeModel.findByIdAndDelete(id);
-        return doc ? new AuthType(doc.toObject()) : null;
-    }
-
-    static async create(data) {
-        const doc = new AuthTypeModel(data);
-        const saved = await doc.save();
-        return new AuthType(saved.toObject());
-    }
-
-    // Método para convertir a objeto plano (útil para compatibilidad)
     toObject() {
-        const obj = {};
-        
-        // Only include defined fields
-        if (this._id !== undefined) obj._id = this._id;
-        if (this.nombre !== undefined) obj.nombre = this.nombre;
-        if (this.descripcion !== undefined) obj.descripcion = this.descripcion;
-        if (this.__v !== undefined) obj.__v = this.__v;
-        
-        return obj;
+        return buildObject(this, ['nombre', 'descripcion']);
+    }
+
+    toString() {
+        return `[${this.getDisplayName()}] ${this.#descripcion || 'Sin descripción'}`;
     }
 }
 
