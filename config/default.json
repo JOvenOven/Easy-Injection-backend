@@ -1,0 +1,8 @@
+{
+    "jwtPrivateKey": "",
+    "db": "",
+    "email": {
+        "user": "",
+        "password": ""
+    }
+}

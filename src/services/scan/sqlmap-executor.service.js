@@ -1,0 +1,1018 @@
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+
+class SqlmapExecutor {
+    constructor(config, logger, emitter, activeProcesses) {
+        this.config = config;
+        this.logger = logger;
+        this.emitter = emitter;
+        this.activeProcesses = activeProcesses;
+        
+        this.toolConfig = {
+            path: config.sqlmapPath || 'sqlmap',
+            commonArgs: [
+                '--batch',
+                '--random-agent'
+            ],
+            crawlDepth: config.crawlDepth || 2,
+            level: config.level || 1,
+            risk: config.risk || 1,
+            threads: config.threads || 1,
+            timeout: config.timeout || 30
+        };
+
+        this.tmpDir = config.tmpDir || path.join(os.tmpdir(), 'easyinjection_sqlmap_tmp');
+        this.outputDir = config.outputDir || null;
+    }
+
+    async checkAvailability() {
+        try {
+            const result = await this.runCommand(['--version'], 5000);
+            this.logger.addLog(`✓ sqlmap disponible: ${result.stdout?.slice(0,14)}`, 'success');
+            return true;
+        } catch (error) {
+            this.logger.addLog(`⚠ sqlmap no encontrado. Asegúrate de que está instalado y en PATH`, 'warning');
+            this.logger.addLog(`Ruta esperada: ${this.toolConfig.path}`, 'info');
+            this.logger.addLog(`Detalles: ${error.message}`, 'error');
+            if (error.stdout) this.logger.addLog(`stdout: ${error.stdout}`, 'debug');
+            if (error.stderr) this.logger.addLog(`stderr: ${error.stderr}`, 'debug');
+            return false;
+        }
+    }
+
+    _buildAnswersArg() {
+        const answers = [
+            'do you want to check for the existence of site\'s sitemap(.xml)=N',
+            'do you want to normalize crawling results=Y',
+            'do you want to store crawling results to a temporary file for eventual further processing with other tools=Y',
+            'Do you want to skip further tests involving it?=n'
+        ];
+        return `--answers="${answers.join(',')}"`;
+    }
+
+    async runCrawl() {
+        if (!fs.existsSync(this.tmpDir)) {
+            fs.mkdirSync(this.tmpDir, { recursive: true });
+        }
+
+        const args = [
+            '-u', this.config.url,
+            '--crawl', this.toolConfig.crawlDepth.toString(),
+            this._buildAnswersArg(),
+            '--forms',
+            ...this.toolConfig.commonArgs,
+            '--threads', this.toolConfig.threads.toString(),
+            '--tmp-dir', this.tmpDir,
+            '-v', '1'
+        ];
+
+        this._addDbmsAndHeaders(args);
+
+        this.logger.addLog(`Ejecutando: sqlmap ${args.join(' ')}`, 'debug', null, true);
+
+        return new Promise(async (resolve, reject) => {
+            const { executable, args: spawnArgs, spawnOpts } = this.getSpawnCommandForTool(this.toolConfig.path, args);
+            this.logger.addLog(`DEBUG spawn: ${executable} ${spawnArgs.join(' ')}`, 'debug', null, true);
+            const proc = spawn(executable, spawnArgs, spawnOpts);
+            this.activeProcesses.set('sqlmap-crawl', proc);
+
+            let buffer = '';
+            let crawlFinished = false;
+            let timeoutTimer = null;
+            const finishPattern = /\[?\d{2}:\d{2}:\d{2}\]?.*\[INFO\]\s+found a total of \d+ targets/i;
+            // const finishPattern = /\[\d{2}:\d{2}:\d{2}\]\s+\[INFO\]\s+using\s+['"].+?results-[^'"]+\.csv['"]\s+as the CSV results file in multiple targets mode/i;
+
+            const gracefulKill = async (proc, gracePeriod = 300) => {
+                try {
+                    proc.kill('SIGTERM');
+                    await new Promise(resolve => setTimeout(resolve, gracePeriod));
+                    
+                    if (!proc.killed && proc.exitCode === null) {
+                        proc.kill('SIGKILL');
+                        this.logger.addLog('Forzando terminación del proceso sqlmap', 'debug');
+                    }
+                } catch (error) {
+                    this.logger.addLog(`Error al terminar proceso: ${error.message}`, 'warning');
+                }
+            };
+
+            const processCrawlResults = async () => {
+                if (crawlFinished) return;
+                crawlFinished = true;
+
+                if (timeoutTimer) {
+                    clearTimeout(timeoutTimer);
+                    timeoutTimer = null;
+                }
+
+                try {
+                    await new Promise(resolve => setTimeout(resolve, 5000));
+
+                    let csvPath = null;
+                    for (let attempt = 0; attempt < 3; attempt++) {
+                        csvPath = await this.findCrawlCsv(this.tmpDir);
+                        if (csvPath) {
+                            break;
+                        }
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                    }
+                    
+                    if (!csvPath) {
+                        this.logger.addLog(`⚠ No se encontró CSV de crawling en tmp-dir: ${this.tmpDir}`, 'warning');
+                        try {
+                            const listAllFiles = (dir, fileList = []) => {
+                                const files = fs.readdirSync(dir);
+                                files.forEach(file => {
+                                    const filePath = path.join(dir, file);
+                                    if (fs.statSync(filePath).isDirectory()) {
+                                        listAllFiles(filePath, fileList);
+                                    } else if (file.endsWith('.csv')) {
+                                        fileList.push(filePath);
+                                    }
+                                });
+                                return fileList;
+                            };
+                            const csvFiles = listAllFiles(this.tmpDir);
+                            if (csvFiles.length > 0) {
+                            } else {
+                                this.logger.addLog(`No se encontraron archivos CSV en tmp-dir`, 'debug');
+                            }
+                        } catch (err) {
+                            this.logger.addLog(`Error listando tmp-dir: ${err.message}`, 'debug');
+                        }
+                        this.emitter.emit('crawler:failed', { reason: 'CSV not found' });
+                        resolve();
+                        return;
+                    }
+
+
+                    this.emitter.emit('crawler:finished', {
+                        csvPath
+                    });
+
+                    resolve();
+                } catch (error) {
+                    this.logger.addLog(`Error procesando resultados del crawl: ${error.message}`, 'error');
+                    this.emitter.emit('crawler:failed', { reason: error.message });
+                    reject(error);
+                }
+            };
+
+            proc.stdout.on('data', (data) => {
+                const output = data.toString();
+                process.stdout.write(`[sqlmap crawl stdout] ${output}`);
+                
+                buffer += output;
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    if (finishPattern.test(line) && !crawlFinished) {
+                        this.logger.addLog('✓ Crawling completado, procesando resultados...', 'success');
+                        setTimeout(() => {
+                            gracefulKill(proc).then(() => {
+                                processCrawlResults();
+                            });
+                        }, 1000);
+                    }
+                }
+            });
+
+            proc.stderr.on('data', (data) => {
+                const error = data.toString();
+                process.stderr.write(`[sqlmap crawl stderr] ${error}`);
+                
+                if (error.trim()) {
+                    this.logger.addLog(`sqlmap stderr: ${error.trim()}`, 'debug', null, true);
+                }
+            });
+
+            proc.on('close', async (code) => {
+                this.activeProcesses.delete('sqlmap-crawl');
+                
+                if (crawlFinished) {
+                    return;
+                }
+
+                if (code === 0 || code === null) {
+                    await processCrawlResults();
+                } else if (!crawlFinished) {
+                    reject(new Error(`sqlmap crawl exited with code ${code}`));
+                }
+            });
+
+            proc.on('error', (error) => {
+                this.activeProcesses.delete('sqlmap-crawl');
+                if (timeoutTimer) clearTimeout(timeoutTimer);
+                reject(new Error(`Failed to start sqlmap: ${error.message}`));
+            });
+
+            timeoutTimer = setTimeout(async () => {
+                if (this.activeProcesses.has('sqlmap-crawl') && !crawlFinished) {
+                    await gracefulKill(proc);
+                    this.logger.addLog('Timeout de crawling alcanzado, intentando procesar resultados...', 'warning');
+                    await processCrawlResults();
+                }
+            }, this.toolConfig.timeout * 1000);
+        });
+    }
+    
+    async findCrawlCsv(tmpDir) {
+        try {
+            if (!fs.existsSync(tmpDir)) {
+                this.logger.addLog(`tmp-dir no existe: ${tmpDir}`, 'debug');
+                return null;
+            }
+
+            const files = [];
+            
+            const searchDir = (dir, depth = 0) => {
+                try {
+                    if (depth > 5) return;
+                    
+                    const entries = fs.readdirSync(dir, { withFileTypes: true });
+                    
+                    for (const entry of entries) {
+                        const fullPath = path.join(dir, entry.name);
+                        
+                        try {
+                            if (entry.isDirectory()) {
+                                searchDir(fullPath, depth + 1);
+                            } else if (entry.isFile() && entry.name.endsWith('.csv')) {
+                                const stats = fs.statSync(fullPath);
+                                const oneHourAgo = Date.now() - (60 * 60 * 1000);
+                                if (stats.mtime.getTime() > oneHourAgo) {
+                                    files.push({ path: fullPath, mtime: stats.mtime });
+                                }
+                            }
+                        } catch (entryError) {
+                            continue;
+                        }
+                    }
+                } catch (error) {
+                    this.logger.addLog(`Error buscando CSV en ${dir}: ${error.message}`, 'debug');
+                }
+            };
+
+            searchDir(tmpDir);
+
+            if (files.length === 0) {
+                this.logger.addLog(`No se encontraron archivos CSV en ${tmpDir}`, 'debug');
+                return null;
+            }
+
+            files.sort((a, b) => b.mtime - a.mtime);
+            const selectedFile = files[0].path;
+            return selectedFile;
+        } catch (error) {
+            this.logger.addLog(`Error buscando CSV: ${error.message}`, 'error');
+            return null;
+        }
+    }
+
+    async processCrawlCsvToEndpointsAndParams(csvPath) {
+        try {
+            if (!fs.existsSync(csvPath)) {
+                throw new Error(`CSV file not found: ${csvPath}`);
+            }
+
+            const csvContent = fs.readFileSync(csvPath, 'utf-8');
+            const lines = csvContent.split('\n').map(l => l.trim()).filter(l => l);
+
+            if (lines.length < 2) {
+                throw new Error('CSV file has no data rows');
+            }
+
+            const dataLines = lines.slice(1);
+            const endpoints = [];
+            const parameters = [];
+            const endpointMap = new Map();
+
+            for (const line of dataLines) {
+                const firstCommaIndex = line.indexOf(',');
+                
+                let url, method, postData;
+                
+                if (firstCommaIndex === -1) {
+                    url = line.trim();
+                    method = 'GET';
+                    postData = null;
+                } else {
+                    url = line.substring(0, firstCommaIndex).trim();
+                    postData = line.substring(firstCommaIndex + 1).trim();
+                    method = postData ? 'POST' : 'GET';
+                }
+
+                if (!url) {
+                    continue;
+                }
+
+                const urlParams = this._extractUrlParams(url);
+                
+                const postParams = postData ? this._extractPostParams(postData) : [];
+
+                const allParams = [...urlParams, ...postParams];
+                
+                const endpointKey = `${method}:${url}`;
+                
+                if (!endpointMap.has(endpointKey)) {
+                    const endpoint = {
+                        url,
+                        method,
+                        parameters: allParams,
+                        postData: postData || null
+                    };
+                    
+                    endpoints.push(endpoint);
+                    endpointMap.set(endpointKey, endpoint);
+                    
+                    for (const paramName of allParams) {
+                        parameters.push({
+                            endpoint: url,
+                            name: paramName,
+                            type: method === 'GET' ? 'query' : 'body',
+                            testable: true
+                        });
+                    }
+                } else {
+                    const existingEndpoint = endpointMap.get(endpointKey);
+                    for (const paramName of allParams) {
+                        if (!existingEndpoint.parameters.includes(paramName)) {
+                            existingEndpoint.parameters.push(paramName);
+                            parameters.push({
+                                endpoint: url,
+                                name: paramName,
+                                type: method === 'GET' ? 'query' : 'body',
+                                testable: true
+                            });
+                        }
+                    }
+                    if (postData && !existingEndpoint.postData) {
+                        existingEndpoint.postData = postData;
+                    }
+                }
+            }
+
+            return {
+                endpoints,
+                parameters
+            };
+        } catch (error) {
+            this.logger.addLog(`Error procesando CSV: ${error.message}`, 'error');
+            throw error;
+        }
+    }
+
+    async _processCrawlCsvToTargets(csvPath) {
+        const result = await this.processCrawlCsvToEndpointsAndParams(csvPath);
+        
+        const outputDir = this.outputDir || path.join(os.tmpdir(), 'easyinjection_scans');
+        if (!fs.existsSync(outputDir)) {
+            fs.mkdirSync(outputDir, { recursive: true });
+        }
+
+        const getTargets = [];
+        const postTargets = [];
+
+        for (const endpoint of result.endpoints) {
+            if (endpoint.method === 'GET') {
+                getTargets.push(endpoint.url);
+            } else {
+                const postData = endpoint.postData || endpoint.parameters.map(p => `${p}=`).join('&');
+                postTargets.push(`${endpoint.url}|||${postData}`);
+            }
+        }
+
+        const getTargetsPath = path.join(outputDir, 'get_targets.txt');
+        fs.writeFileSync(getTargetsPath, getTargets.join('\n') + (getTargets.length > 0 ? '\n' : ''), 'utf-8');
+        this.logger.addLog(`✓ get_targets.txt generado: ${getTargets.length} targets`, 'debug');
+
+        const postTargetsPath = path.join(outputDir, 'post_targets.txt');
+        fs.writeFileSync(postTargetsPath, postTargets.join('\n') + (postTargets.length > 0 ? '\n' : ''), 'utf-8');
+        this.logger.addLog(`✓ post_targets.txt generado: ${postTargets.length} targets`, 'debug');
+
+        return {
+            getTargetsPath,
+            postTargetsPath,
+            getCount: getTargets.length,
+            postCount: postTargets.length
+        };
+    }
+
+    async processGetTargets(getTargetsPath, onEndpointDiscovered, onVulnerabilityFound, options = {}) {
+        if (!fs.existsSync(getTargetsPath)) {
+            this.logger.addLog(`get_targets.txt no encontrado: ${getTargetsPath}`, 'warning');
+            return;
+        }
+
+        const content = fs.readFileSync(getTargetsPath, 'utf-8');
+        const urls = content.split('\n').map(l => l.trim()).filter(l => l);
+
+        if (urls.length === 0) {
+            this.logger.addLog('No hay targets GET para procesar', 'info');
+            return;
+        }
+
+        this.logger.addLog(`Procesando ${urls.length} targets GET...`, 'info');
+
+        for (const url of urls) {
+            if (!url) continue;
+
+            if (options.questionHandler) {
+                await options.questionHandler.waitIfPaused();
+            }
+
+            try {
+                if (onEndpointDiscovered) {
+                    onEndpointDiscovered({
+                        url,
+                        method: 'GET',
+                        parameters: this._extractUrlParams(url)
+                    });
+                }
+
+                if (this.config.flags?.sqli !== false) {
+                    await this._testUrlWithSqlmap(url, null, onVulnerabilityFound, options);
+                }
+
+                if (this.config.flags?.xss !== false && options.dalfoxExecutor) {
+                    await options.dalfoxExecutor.scanUrl(url, onVulnerabilityFound);
+                }
+            } catch (error) {
+                this.logger.addLog(`Error procesando GET target ${url}: ${error.message}`, 'warning');
+            }
+        }
+    }
+
+    async processPostTargets(postTargetsPath, onEndpointDiscovered, onVulnerabilityFound, options = {}) {
+        if (!fs.existsSync(postTargetsPath)) {
+            this.logger.addLog(`post_targets.txt no encontrado: ${postTargetsPath}`, 'warning');
+            return;
+        }
+
+        const content = fs.readFileSync(postTargetsPath, 'utf-8');
+        const lines = content.split('\n').map(l => l.trim()).filter(l => l);
+
+        if (lines.length === 0) {
+            this.logger.addLog('No hay targets POST para procesar', 'info');
+            return;
+        }
+
+        this.logger.addLog(`Procesando ${lines.length} targets POST...`, 'info');
+
+        for (const line of lines) {
+            if (!line) continue;
+
+            const parts = line.split('|||');
+            if (parts.length < 2) {
+                this.logger.addLog(`Formato inválido en línea POST: ${line}`, 'warning');
+                continue;
+            }
+
+            const url = parts[0].trim();
+            const postData = parts.slice(1).join('|||').trim();
+
+            if (!url || !postData) {
+                continue;
+            }
+
+            if (options.questionHandler) {
+                await options.questionHandler.waitIfPaused();
+            }
+
+            try {
+                if (onEndpointDiscovered) {
+                    onEndpointDiscovered({
+                        url,
+                        method: 'POST',
+                        parameters: this._extractPostParams(postData)
+                    });
+                }
+
+                if (this.config.flags?.sqli !== false) {
+                    await this._testUrlWithSqlmap(url, postData, onVulnerabilityFound, options);
+                }
+
+            } catch (error) {
+                this.logger.addLog(`Error procesando POST target ${url}: ${error.message}`, 'warning');
+            }
+        }
+    }
+
+    async _testUrlWithSqlmap(url, postData, onVulnerabilityFound, options = {}) {
+        const args = [
+            '-u', url,
+            ...this.toolConfig.commonArgs,
+            '--level', this.toolConfig.level.toString(),
+            '--risk', this.toolConfig.risk.toString(),
+            '--threads', this.toolConfig.threads.toString()
+        ];
+
+        if (postData) {
+            args.push('--data', postData);
+        }
+
+        this._addDbmsAndHeaders(args);
+
+        this.logger.addLog(`Ejecutando sqlmap sobre: ${url}${postData ? ' (POST)' : ''}`, 'debug', null, true);
+
+        const params = postData ? this._extractPostParams(postData) : this._extractUrlParams(url);
+
+        if (params.length === 0) {
+            try {
+                const param = {
+                    endpoint: url,
+                    name: '*',
+                    type: postData ? 'body' : 'query',
+                    testable: true
+                };
+
+                await this.testParameter(param, 'detection', onVulnerabilityFound);
+            } catch (error) {
+                this.logger.addLog(`Error testeando URL ${url}: ${error.message}`, 'warning');
+            }
+        } else {
+            for (const paramName of params) {
+                try {
+                    if (options.questionHandler) {
+                        await options.questionHandler.waitIfPaused();
+                    }
+
+                    const param = {
+                        endpoint: url,
+                        name: paramName,
+                        type: postData ? 'body' : 'query',
+                        testable: true
+                    };
+
+                    await this.testParameter(param, 'detection', onVulnerabilityFound);
+                } catch (error) {
+                    this.logger.addLog(`Error testeando parámetro ${paramName}: ${error.message}`, 'warning');
+                }
+            }
+        }
+    }
+
+    _extractUrlParams(url) {
+        try {
+            const urlObj = new URL(url);
+            return Array.from(urlObj.searchParams.keys());
+        } catch {
+            const match = url.match(/[?&]([^=&]+)=/g);
+            return match ? match.map(p => p.slice(1, -1)) : [];
+        }
+    }
+
+    _extractPostParams(postData) {
+        const params = new Set();
+        const pairs = postData.split('&');
+
+        for (const pair of pairs) {
+            const equalIndex = pair.indexOf('=');
+            if (equalIndex > 0) {
+                const key = pair.substring(0, equalIndex).trim();
+                if (key) {
+                    params.add(key);
+                }
+            }
+        }
+
+        return Array.from(params);
+    }
+
+    async testEndpoint(endpoint, params, phase = 'detection', onVulnerabilityFound) {
+        if (!params || params.length === 0) {
+            return;
+        }
+
+        const paramNames = params.map(p => p.name).join(',');
+        
+        const args = [
+            '-u', endpoint,
+            '-p', paramNames,
+            '--level', this.toolConfig.level.toString(),
+            '--risk', this.toolConfig.risk.toString(),
+            ...this.toolConfig.commonArgs,
+            '--threads', this.toolConfig.threads.toString()
+        ];
+
+        this._addDbmsAndHeaders(args);
+
+        if (phase === 'detection') {
+        }
+
+        if (phase === 'fingerprint') {
+            args.push('--fingerprint');
+        }
+
+        if (phase === 'exploit') {
+            args.push('--current-db');
+            args.push('--banner');
+        }
+
+        this.logger.addLog(`Ejecutando sqlmap para endpoint ${endpoint} con parámetros: ${paramNames}`, 'info');
+        this.logger.addLog(`Ejecutando: sqlmap ${args.join(' ')}`, 'debug', null, true);
+
+        return new Promise((resolve) => {
+            const { executable, args: spawnArgs, spawnOpts } = this.getSpawnCommandForTool(this.toolConfig.path, args);
+            this.logger.addLog(`DEBUG spawn: ${executable} ${spawnArgs.join(' ')}`, 'debug', null, true);
+            const proc = spawn(executable, spawnArgs, spawnOpts);
+            const processKey = `sqlmap-test-endpoint-${endpoint.replace(/[^a-zA-Z0-9]/g, '_')}-${phase}`;
+            this.activeProcesses.set(processKey, proc);
+
+            let buffer = '';
+            const foundVulnerabilities = new Map();
+
+            proc.stdout.on('data', (data) => {
+                const output = data.toString();
+                process.stdout.write(`[sqlmap stdout] ${output}`);
+                
+                buffer += output;
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    for (const param of params) {
+                        this._parseTestOutput(line, param, phase);
+
+                        if (line.match(/vulnerable|injectable|injection point/i)) {
+                            const paramMentioned = line.includes(param.name) || 
+                                                   line.match(new RegExp(`Parameter:.*${param.name}`, 'i')) ||
+                                                   line.match(new RegExp(`\\[CRITICAL\\].*${param.name}`, 'i'));
+                            
+                            if (paramMentioned && !foundVulnerabilities.has(param.name)) {
+                                foundVulnerabilities.set(param.name, true);
+
+                                let severity = 'critical';
+
+                                if (onVulnerabilityFound) {
+                                    onVulnerabilityFound({
+                                        type: 'SQLi',
+                                        severity: severity,
+                                        endpoint: endpoint,
+                                        parameter: param.name,
+                                        description: `SQL Injection detectada en el parámetro '${param.name}': ${line.trim()}`
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            proc.stderr.on('data', (data) => {
+                const error = data.toString();
+                process.stderr.write(`[sqlmap stderr] ${error}`);
+                
+                if (error.trim()) {
+                    this.logger.addLog(`sqlmap: ${error.trim()}`, 'debug', null, true);
+                }
+            });
+
+            proc.on('close', () => {
+                this.activeProcesses.delete(processKey);
+                this.logger.addLog(`Completado escaneo SQLi para ${endpoint} (${foundVulnerabilities.size} vulnerabilidades encontradas)`, 'info');
+                resolve();
+            });
+
+            proc.on('error', (error) => {
+                this.activeProcesses.delete(processKey);
+                this.logger.addLog(`Error ejecutando sqlmap: ${error.message}`, 'error');
+                resolve();
+            });
+
+            setTimeout(() => {
+                if (this.activeProcesses.has(processKey)) {
+                    proc.kill('SIGTERM');
+                    this.logger.addLog(`Timeout testeando endpoint ${endpoint}`, 'warning');
+                    resolve();
+                }
+            }, this.toolConfig.timeout * 1000);
+        });
+    }
+
+    async testParameter(param, phase = 'detection', onVulnerabilityFound) {
+        const args = [
+            '-u', param.endpoint,
+            '-p', param.name,
+            '--level', this.toolConfig.level.toString(),
+            '--risk', this.toolConfig.risk.toString(),
+            ...this.toolConfig.commonArgs,
+            '--threads', this.toolConfig.threads.toString()
+        ];
+
+        this._addDbmsAndHeaders(args);
+
+        if (phase === 'detection') {
+        }
+
+        if (phase === 'fingerprint') {
+            args.push('--fingerprint');
+        }
+
+        if (phase === 'exploit') {
+            args.push('--current-db');
+            args.push('--banner');
+        }
+
+        this.logger.addLog(`Ejecutando: sqlmap ${args.join(' ')}`, 'debug', null, true);
+
+        return new Promise((resolve) => {
+            const { executable, args: spawnArgs, spawnOpts } = this.getSpawnCommandForTool(this.toolConfig.path, args);
+            this.logger.addLog(`DEBUG spawn: ${executable} ${spawnArgs.join(' ')}`, 'debug', null, true);
+            const proc = spawn(executable, spawnArgs, spawnOpts);
+            const processKey = `sqlmap-test-${param.name}-${phase}`;
+            this.activeProcesses.set(processKey, proc);
+
+            let buffer = '';
+            let vulnerabilityFound = false;
+
+            proc.stdout.on('data', (data) => {
+                const output = data.toString();
+                process.stdout.write(`[sqlmap stdout] ${output}`);
+                
+                buffer += output;
+
+                const lines = buffer.split('\n');
+                buffer = lines.pop() || '';
+
+                for (const line of lines) {
+                    this._parseTestOutput(line, param, phase);
+
+                    if (line.match(/vulnerable|injectable|injection point/i) && !vulnerabilityFound) {
+                        vulnerabilityFound = true;
+
+                        let severity = 'critical';
+                        if (line.match(/time-based|stacked queries/i)) {
+                            severity = 'critical';
+                        } else if (line.match(/union|error-based/i)) {
+                            severity = 'critical';
+                        }
+
+                        if (onVulnerabilityFound) {
+                            onVulnerabilityFound({
+                                type: 'SQLi',
+                                severity: severity,
+                                endpoint: param.endpoint,
+                                parameter: param.name,
+                                description: `SQL Injection detectada en el parámetro '${param.name}': ${line.trim()}`
+                            });
+                        }
+                    }
+                }
+            });
+
+            proc.stderr.on('data', (data) => {
+                const error = data.toString();
+                process.stderr.write(`[sqlmap stderr] ${error}`);
+                
+                if (error.trim()) {
+                    this.logger.addLog(`sqlmap: ${error.trim()}`, 'debug', null, true);
+                }
+            });
+
+            proc.on('close', () => {
+                this.activeProcesses.delete(processKey);
+                resolve();
+            });
+
+            proc.on('error', (error) => {
+                this.activeProcesses.delete(processKey);
+                this.logger.addLog(`Error ejecutando sqlmap: ${error.message}`, 'error');
+                resolve();
+            });
+
+            setTimeout(() => {
+                if (this.activeProcesses.has(processKey)) {
+                    proc.kill('SIGTERM');
+                    this.logger.addLog(`Timeout testeando ${param.name}`, 'warning');
+                    resolve();
+                }
+            }, this.toolConfig.timeout * 1000);
+        });
+    }
+
+    _parseTestOutput(line, param, phase) {
+        const trimmed = line.trim();
+        if (!trimmed) return;
+
+        if (trimmed.match(/^[_\-\|\[\]H\s]+$/) || 
+            trimmed.match(/^[_\-\|\[\]H]+$/) ||
+            trimmed.match(/^\{1\.\d+\.\d+\.\d+/) ||
+            trimmed.match(/^https:\/\/sqlmap\.org/) ||
+            trimmed.match(/^legal disclaimer/i) ||
+            trimmed.match(/^Usage of sqlmap/i) ||
+            trimmed.match(/^\[!\] legal disclaimer/i) ||
+            trimmed.match(/^\[.*\] legal disclaimer/i) ||
+            trimmed.match(/^Press Enter to continue/i) ||
+            trimmed.match(/^please enter/i) ||
+            trimmed.match(/^\[.*\] starting @/i) ||
+            trimmed.match(/^\[.*\] ending @/i) ||
+            trimmed.match(/^\[.*\] using '.+' as the temporary directory/i) ||
+            trimmed.match(/^\[.*\] fetched random HTTP User-Agent/i) ||
+            trimmed.match(/^\[.*\] using '.+' as the CSV results file/i) ||
+            trimmed.match(/^\[.*\] testing connection to the target URL/i) ||
+            trimmed.match(/^\[.*\] WARNING\] running in a single-thread/i) ||
+            // trimmed.match(/^\[.*\] searching for links/i) ||
+            trimmed.match(/^\[.*\] starting crawler/i) ||
+            trimmed.match(/^\[.*\] found a total of \d+ targets/i) ||
+            trimmed.match(/^> Y$/i) ||
+            trimmed.match(/^> \d+$/i) ||
+            trimmed.match(/^> q$/i) ||
+            trimmed.match(/^> [a-z]$/i) ||
+            trimmed.match(/^Edit POST data/i) ||
+            trimmed.match(/^there were multiple injection points/i) ||
+            trimmed.match(/^\[0\] place:/i) ||
+            trimmed.match(/^\[1\] place:/i) ||
+            trimmed.match(/^\[q\] Quit/i) ||
+            trimmed.match(/^\[.*\] INFO\] resuming back-end DBMS/i)) {
+            return;
+        }
+
+        if (line.match(/Parameter:.*vulnerable/i)) {
+            this.logger.addLog(`✓ ${line.trim()}`, 'success');
+        }
+
+        if (line.match(/back-end DBMS/i)) {
+            this.logger.addLog(`DBMS identificado: ${line.trim()}`, 'success');
+        }
+
+        if (line.match(/injection type:/i)) {
+            this.logger.addLog(`Tipo de inyección: ${line.trim()}`, 'info');
+        }
+    }
+
+    _addDbmsAndHeaders(args) {
+        if (this.config.dbms) {
+            args.push('--dbms', this.config.dbms);
+        }
+
+        if (this.config.customHeaders) {
+            const headers = this.config.customHeaders.split('\n').filter(h => h.trim());
+            headers.forEach(header => {
+                args.push('--header', header.trim());
+            });
+        }
+    }
+
+    getSpawnCommandForTool(toolPath, args = []) {
+        const spawnOpts = { shell: false };
+        const isBare = !/[\\/]/.test(String(toolPath));
+      
+        if (process.platform === 'win32' && isBare) {
+          spawnOpts.shell = true;
+          return { executable: toolPath, args, spawnOpts };
+        }
+      
+        if (fs.existsSync(toolPath)) {
+          const ext = path.extname(String(toolPath)).toLowerCase();
+          if (ext === '.py') {
+            const pythonCmd = process.platform === 'win32' ? 'py' : 'python';
+            return { executable: pythonCmd, args: [toolPath, ...args], spawnOpts };
+          } else {
+            return { executable: toolPath, args, spawnOpts };
+          }
+        }
+      
+        if (process.platform === 'win32' && isBare) spawnOpts.shell = true;
+        return { executable: toolPath, args, spawnOpts };
+    }
+
+    async runCommand(args, timeout = 30000, opts = {}) {
+        return new Promise((resolve, reject) => {
+        const autoRespond = (typeof opts.autoRespond === 'boolean') ? opts.autoRespond : true;
+        const autoRespondRegex = opts.autoRespondRegex || /press\s+(enter|any key|return)\b/i;
+        const useShellFallback = (typeof opts.useShellFallback === 'boolean') ? opts.useShellFallback : true;
+    
+        const { executable, args: finalArgs, spawnOpts } = this.getSpawnCommandForTool(this.toolConfig.path, Array.isArray(args) ? args.slice() : []);
+    
+        this.logger.addLog(`Ejecutando comando: ${executable} ${finalArgs.join(' ')}`, 'debug', null, true);
+    
+        let stdout = '';
+        let stderr = '';
+        let responded = false;
+        let finished = false;
+    
+        const proc = spawn(executable, finalArgs, spawnOpts);
+    
+        const timer = setTimeout(() => {
+            if (finished) return;
+            finished = true;
+            try { proc.kill(); } catch (e) {}
+            reject({ message: 'Command timeout', stdout, stderr });
+        }, timeout);
+    
+        const tryAutoRespond = (text, targetProc) => {
+            if (!autoRespond || responded) return;
+            try {
+            if (autoRespondRegex.test(text) && targetProc.stdin && !targetProc.stdin.destroyed) {
+                targetProc.stdin.write('\n');
+                try { targetProc.stdin.end(); } catch (_) {}
+                responded = true;
+            }
+            } catch (e) {
+            this.logger.addLog(`Auto-respond failed: ${e.message}`, 'debug');
+            }
+        };
+    
+        proc.stdout.on('data', (d) => {
+            const t = d.toString();
+            stdout += t;
+            tryAutoRespond(t, proc);
+        });
+    
+        proc.stderr.on('data', (d) => {
+            const t = d.toString();
+            stderr += t;
+            tryAutoRespond(t, proc);
+        });
+    
+        proc.on('close', (code) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+    
+            if (code === 0) {
+            return resolve({ stdout, stderr });
+            }
+    
+            if (useShellFallback && !spawnOpts.shell) {
+            const safeArgs = finalArgs.map(a => typeof a === 'string' && a.includes(' ') ? `"${a}"` : a).join(' ');
+            const shellCmd = `${executable} ${safeArgs}`;
+            this.logger.addLog(`Fallback ejecutando en shell: ${shellCmd}`, 'debug');
+    
+            const fallback = spawn(shellCmd, { shell: true });
+    
+            let fStdout = '';
+            let fStderr = '';
+            let fResponded = false;
+            let fFinished = false;
+    
+            const fTimer = setTimeout(() => {
+                if (fFinished) return;
+                fFinished = true;
+                try { fallback.kill(); } catch (e) {}
+                reject({ message: 'Fallback timeout', stdout: fStdout, stderr: fStderr });
+            }, timeout);
+    
+            const tryAutoRespondFallback = (text) => {
+                if (!autoRespond || fResponded) return;
+                try {
+                if (autoRespondRegex.test(text) && fallback.stdin && !fallback.stdin.destroyed) {
+                    fallback.stdin.write('\n');
+                    try { fallback.stdin.end(); } catch (_) {}
+                    fResponded = true;
+                }
+                } catch (e) {
+                this.logger.addLog(`Fallback auto respondido falló: ${e.message}`, 'debug');
+                }
+            };
+    
+            fallback.stdout.on('data', d => {
+                const t = d.toString();
+                fStdout += t;
+                tryAutoRespondFallback(t);
+            });
+            fallback.stderr.on('data', d => {
+                const t = d.toString();
+                fStderr += t;
+                tryAutoRespondFallback(t);
+            });
+    
+            fallback.on('close', (fcode) => {
+                if (fFinished) return;
+                fFinished = true;
+                clearTimeout(fTimer);
+                if (fcode === 0) resolve({ stdout: fStdout, stderr: fStderr });
+                else reject({ message: `Fallback failed with code ${fcode}`, stdout: fStdout, stderr: fStderr });
+            });
+    
+            fallback.on('error', (err) => {
+                if (fFinished) return;
+                fFinished = true;
+                clearTimeout(fTimer);
+                reject({ message: `Fallback error: ${err.message}`, stdout, stderr: stderr + err.message });
+            });
+    
+            return;
+            }
+    
+            reject({ message: `Command failed with code ${code}`, stdout, stderr });
+        });
+    
+        proc.on('error', (err) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            reject({ message: err.message, stdout, stderr });
+        });
+        });
+    }  
+}
+
+module.exports = SqlmapExecutor;
+

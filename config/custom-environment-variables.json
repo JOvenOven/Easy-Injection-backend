@@ -1,0 +1,16 @@
+{
+    "baseUrlFrontend": "BASE_URL_FRONTEND",
+    "jwtPrivateKey": "easyinjection_dev_jwtPrivateKey_2024",
+    "db": "EASYINJECTION_DB",
+    "sqlmap": {
+        "path": "SQLMAP_PATH",
+        "timeout": "SQLMAP_TIMEOUT"
+    },
+    "dalfox": {
+        "path": "DALFOX_PATH"
+    },
+    "email": {
+        "user": "EMAIL_USER",
+        "password": "EMAIL_PASS"
+    }
+}
