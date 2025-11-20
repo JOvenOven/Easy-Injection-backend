@@ -43,14 +43,6 @@ router.post('/', async (req, res) => {
             });
         }
 
-        if (user.twoFactorEnabled) {
-            return res.json({
-                requires2FA: true,
-                email: user.email,
-                message: 'Se requiere autenticación de dos factores'
-            });
-        }
-
         user.updateLogin();
         
         const token = user.generateAuthToken();
@@ -70,7 +62,6 @@ router.post('/', async (req, res) => {
 
         res.json({
             message: 'Login exitoso',
-            requires2FA: false,
             token: token,
             user: user.toDTO()
         });

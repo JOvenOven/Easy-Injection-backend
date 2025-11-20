@@ -132,18 +132,10 @@ router.put('/password', auth, async (req, res) => {
 
         user.contrasena_hash = newPasswordHash;
 
-        if (user.twoFactorEnabled) {
-            user.disable2FA();
-        }
-
         await user.save();
 
-        const message = user.twoFactorEnabled 
-            ? 'Contraseña actualizada exitosamente. 2FA ha sido deshabilitado por seguridad.'
-            : 'Contraseña actualizada exitosamente';
-
         res.json({
-            message: message
+            message: 'Contraseña actualizada exitosamente'
         });
     } catch (error) {
         res.status(500).json({ 

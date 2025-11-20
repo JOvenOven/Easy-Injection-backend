@@ -29,7 +29,7 @@ router.post('/forgot-password', async (req, res) => {
         
         await user.save();
 
-        const resetUrl = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
+        const resetUrl = `${process.env.BASE_URL_FRONTEND}/reset-password?token=${resetToken}`;
         
         const emailHtml = `
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
@@ -64,7 +64,7 @@ router.post('/forgot-password', async (req, res) => {
                     </p>
                     <div style="margin-top: 30px; padding: 16px; background: #fef3c7; border-left: 4px solid #f59e0b; border-radius: 6px;">
                         <p style="margin: 0; font-size: 14px; color: #92400e;">
-                            <strong>⚠️ Importante:</strong> Este enlace expirará en 1 hora.
+                            <strong> Importante:</strong> Este enlace expirará en 1 hora.
                         </p>
                     </div>
                     <p style="font-size: 14px; color: #6b7280; margin-top: 20px;">
@@ -127,12 +127,6 @@ router.post('/reset-password', async (req, res) => {
         user.contrasena_hash = await bcrypt.hash(newPassword, salt);
         user.passwordResetToken = undefined;
         user.passwordResetExpires = undefined;
-        
-        if (user.twoFactorEnabled) {
-            user.twoFactorEnabled = false;
-            user.twoFactorSecret = null;
-            user.twoFactorBackupCodes = [];
-        }
         
         await user.save();
 

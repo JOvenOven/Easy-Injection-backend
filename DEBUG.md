@@ -68,7 +68,6 @@ $env:DEBUG = "easyinjection:models:scan,easyinjection:models:user"
     - Puntos: `Agregando %d puntos a usuario: %s`
     - Historial: `Historial de respuestas actualizado`
     - Sesiones: `Sesión agregada/removida para usuario: %s`
-    - 2FA: `2FA habilitado/deshabilitado para usuario: %s`
     - Términos: `Términos aceptados por usuario: %s`
     - Password Reset: `Token de reseteo de contraseña establecido`
 

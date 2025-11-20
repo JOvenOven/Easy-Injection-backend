@@ -32,11 +32,6 @@ const sessionSchema = new mongoose.Schema({
     lastActivity: { type: Date, default: Date.now }
 }, { _id: false });
 
-const twoFactorBackupCodeSchema = new mongoose.Schema({
-    code: String,
-    used: { type: Boolean, default: false }
-}, { _id: false });
-
 const userSchema = new mongoose.Schema({
     username: { type: String, minlength: 3, maxlength: 50, required: true, unique: true },
     email: { type: String, minlength: 5, maxlength: 255, unique: true, required: true },
@@ -57,10 +52,7 @@ const userSchema = new mongoose.Schema({
     passwordResetExpires: { type: Date },
     acceptedTerms: { type: Boolean, required: true, default: false },
     acceptedTermsDate: { type: Date },
-    activeSessions: [sessionSchema],
-    twoFactorEnabled: { type: Boolean, default: false },
-    twoFactorSecret: { type: String, default: null },
-    twoFactorBackupCodes: [twoFactorBackupCodeSchema]
+    activeSessions: [sessionSchema]
 });
 
 const UserModel = mongoose.models.User || mongoose.model('User', userSchema);
@@ -70,7 +62,7 @@ class User extends BaseModel {
     #fecha_registro; #ultimo_login; #estado_cuenta; #email_verificado; #token_verificacion;
     #fecha_expiracion_token; #activo; #codigo_verificacion; #fecha_verificacion;
     #googleId; #passwordResetToken; #passwordResetExpires; #acceptedTerms; #acceptedTermsDate;
-    #activeSessions; #twoFactorEnabled; #twoFactorSecret; #twoFactorBackupCodes;
+    #activeSessions;
 
     constructor(data = {}) {
         super(data);
@@ -95,9 +87,6 @@ class User extends BaseModel {
         this.#acceptedTerms = plainData.acceptedTerms !== undefined ? plainData.acceptedTerms : false;
         this.#acceptedTermsDate = plainData.acceptedTermsDate;
         this.#activeSessions = plainData.activeSessions || [];
-        this.#twoFactorEnabled = plainData.twoFactorEnabled || false;
-        this.#twoFactorSecret = plainData.twoFactorSecret;
-        this.#twoFactorBackupCodes = plainData.twoFactorBackupCodes || [];
         debug('Usuario creado: %s (%s)', this.#username, this.#email);
     }
 
@@ -161,13 +150,6 @@ class User extends BaseModel {
     set acceptedTermsDate(value) { this.#acceptedTermsDate = value; }
 
     get activeSessions() { return [...this.#activeSessions]; }
-    get twoFactorEnabled() { return this.#twoFactorEnabled; }
-    set twoFactorEnabled(value) { this.#twoFactorEnabled = Boolean(value); }
-
-    get twoFactorSecret() { return this.#twoFactorSecret; }
-    set twoFactorSecret(value) { this.#twoFactorSecret = value; }
-
-    get twoFactorBackupCodes() { return [...this.#twoFactorBackupCodes]; }
 
     activate() {
         debug('Activando usuario: %s', this.#username);
@@ -272,32 +254,6 @@ class User extends BaseModel {
         return this.#activeSessions ? this.#activeSessions.length : 0;
     }
 
-    enable2FA(secret) {
-        this.#twoFactorEnabled = true;
-        this.#twoFactorSecret = secret;
-        debug('2FA habilitado para usuario: %s', this.#username);
-    }
-
-    disable2FA() {
-        this.#twoFactorEnabled = false;
-        this.#twoFactorSecret = null;
-        this.#twoFactorBackupCodes = [];
-        debug('2FA deshabilitado para usuario: %s', this.#username);
-    }
-
-    addBackupCodes(codes) {
-        this.#twoFactorBackupCodes = codes.map(code => ({ code, used: false }));
-    }
-
-    useBackupCode(code) {
-        const backupCode = this.#twoFactorBackupCodes.find(bc => bc.code === code && !bc.used);
-        if (backupCode) {
-            backupCode.used = true;
-            return true;
-        }
-        return false;
-    }
-
     acceptTerms() {
         this.#acceptedTerms = true;
         this.#acceptedTermsDate = new Date();
@@ -346,10 +302,9 @@ class User extends BaseModel {
                 'fecha_registro', 'ultimo_login', 'estado_cuenta', 'email_verificado',
                 'token_verificacion', 'fecha_expiracion_token', 'activo', 'codigo_verificacion',
                 'fecha_verificacion', 'googleId', 'passwordResetToken', 'passwordResetExpires',
-                'acceptedTerms', 'acceptedTermsDate', 'twoFactorEnabled', 'twoFactorSecret'
+                'acceptedTerms', 'acceptedTermsDate'
             ]),
-            activeSessions: this.#activeSessions,
-            twoFactorBackupCodes: this.#twoFactorBackupCodes
+            activeSessions: this.#activeSessions
         };
     }
 
@@ -369,7 +324,6 @@ class User extends BaseModel {
             precision: this.getAccuracy(),
             totalRespuestas: this.getTotalAnswers(),
             sesionesActivas: this.getActiveSessionCount(),
-            twoFactorEnabled: this.#twoFactorEnabled,
             googleConnected: !!this.#googleId,
             acceptedTerms: this.#acceptedTerms
         };
