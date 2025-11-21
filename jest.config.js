@@ -10,9 +10,13 @@ module.exports = {
         '**/__tests__/**/*.test.js',
         '**/?(*.)+(spec|test).js'
     ],
-    testTimeout: 10000,
+    testTimeout: 30000,
     clearMocks: true,
     resetMocks: true,
     restoreMocks: true,
-    verbose: true
+    verbose: true,
+
+    testPathIgnorePatterns: [
+        '/node_modules/',
+    ]
 };

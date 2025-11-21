@@ -10,6 +10,8 @@
     "test:email-verification": "node test-email-verification.js",
     "test:login": "node test-login.js",
     "test": "jest",
+    "test:unit": "jest --testPathIgnorePatterns=integration",
+    "test:integration": "jest integration.test.js",
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage"
   },
@@ -42,6 +44,7 @@
     "jest": "^30.2.0",
     "mongodb-memory-server": "^10.3.0",
     "nodemon": "^3.1.11",
+    "socket.io-client": "^4.8.1",
     "supertest": "^7.1.4"
   }
 }
